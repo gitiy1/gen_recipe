@@ -71,12 +71,11 @@ def generate_smart_recipe(domain, filename):
     cat_data_list.sort(key=lambda x: x['name'])
     
     # 3. 生成 Recipe
-    # 关键修复：同时引入 Feed 和 Article 类
     recipe_code = f"""import feedparser
 import math
 import time
 from calibre.web.feeds.news import BasicNewsRecipe
-from calibre.web.feeds import Feed, Article  # <--- 关键修复：导入 Article
+from calibre.web.feeds import Feed, Article
 
 class JidujiaoChronological(BasicNewsRecipe):
     title          = '基督教教育网 (全站编年史版)'
@@ -138,17 +137,18 @@ class JidujiaoChronological(BasicNewsRecipe):
             # 排序：从旧到新
             all_articles.sort(key=lambda x: x['date'] if x['date'] else time.localtime(0))
             
-            # --- 关键修复区 ---
             final_articles = []
             for a in all_articles:
-                # 必须实例化 Article 对象，不能使用字典
-                # Article(title, url, description, date, content)
+                # --- 关键修复区 ---
+                # Article 构造函数签名: (title, url, description, author, published, content)
+                # 我们之前漏掉了 author，导致参数错位
                 art = Article(
-                    a['title'],
-                    a['url'],
-                    a['description'],
-                    a['date_str'],
-                    None  # content 留空，让 Calibre 自动去抓
+                    a['title'],       # 1. title
+                    a['url'],         # 2. url
+                    a['description'], # 3. description
+                    'Unknown',        # 4. author (补上这个！)
+                    a['date_str'],    # 5. published
+                    None              # 6. content
                 )
                 final_articles.append(art)
             
