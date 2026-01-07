@@ -75,22 +75,30 @@ def generate_smart_recipe(domain, filename):
 import math
 import time
 from calibre.web.feeds.news import BasicNewsRecipe
-from calibre.web.feeds import Feed
 
-# --- 自定义 Article 类 (Duck Typing) ---
-# 补全了 summary, text 等常用属性，防止 AttributeError
+# --- 自定义 Article 类 ---
 class MyArticle:
     def __init__(self, title, url, description, author, published, content):
         self.title = title
         self.url = url
         self.description = description
-        self.summary = description  # <--- 关键修复：Calibre 需要这个属性
+        self.summary = description 
         self.author = author
         self.published = published
         self.content = content
-        self.text = content         # <--- 预防性修复：部分插件可能访问 .text
+        self.text = content
         self.id = None
-        self.date = None            # <--- 预防性修复
+        self.date = None
+
+# --- 自定义 Feed 类 (关键修复) ---
+# 补全 image_url 等属性，防止 AttributeError
+class MyFeed:
+    def __init__(self, title, articles):
+        self.title = title
+        self.articles = articles
+        self.image_url = None  # <--- 修复报错的核心
+        self.description = None
+        self.id = None
 
 class JidujiaoChronological(BasicNewsRecipe):
     title          = '基督教教育网 (全站编年史版)'
@@ -100,7 +108,7 @@ class JidujiaoChronological(BasicNewsRecipe):
     oldest_article = 36500
     max_articles_per_feed = 1000
     auto_cleanup   = True
-    timeout        = 30
+    timeout        = 60  # 稍微增加一点超时
     simultaneous_downloads = 5
 
     MY_CATEGORIES = {cat_data_list}
@@ -133,7 +141,6 @@ class JidujiaoChronological(BasicNewsRecipe):
                         title = entry.get('title', 'Untitled')
                         url   = entry.get('link', '')
                         desc  = entry.get('description', '')
-                        # description 往往含有 HTML，作为 summary 也没问题
                         
                         date  = entry.get('published_parsed', None)
                         date_str = entry.get('published', '')
@@ -147,7 +154,7 @@ class JidujiaoChronological(BasicNewsRecipe):
                             'author': 'Unknown',
                             'date': date,
                             'date_str': date_str,
-                            'content': '' # 留空，让 Calibre 下载网页
+                            'content': ''
                         }})
                 except Exception as e:
                     print(f"  -> 抓取失败: {{e}}")
@@ -168,9 +175,8 @@ class JidujiaoChronological(BasicNewsRecipe):
                 final_articles.append(art)
             
             if final_articles:
-                feed_obj = Feed()
-                feed_obj.title = category_name
-                feed_obj.articles = final_articles
+                # 使用自定义的 MyFeed 类
+                feed_obj = MyFeed(category_name, final_articles)
                 master_feeds_list.append(feed_obj)
                 
                 print(f"  -> {{category_name}} 完成: 合并了 {{len(final_articles)}} 篇文章")
@@ -179,7 +185,7 @@ class JidujiaoChronological(BasicNewsRecipe):
 """
     with open(filename, "w", encoding="utf-8") as f:
         f.write(recipe_code)
-    print(f"成功生成修复版 Recipe: {filename}")
+    print(f"成功生成完结版 Recipe: {filename}")
 
 if __name__ == "__main__":
     generate_smart_recipe(TARGET_DOMAIN, RECIPE_FILENAME)
