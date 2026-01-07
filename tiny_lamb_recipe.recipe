@@ -12,7 +12,7 @@ from calibre.web.feeds.news import BasicNewsRecipe
 
 class TinyLambRecipe(BasicNewsRecipe):
     title = u"基督教小小羊园地（按分类目录）"
-    description = u"RSS 拉文章 -> 文章页解析分类 -> 按分类生成 EPUB 目录（正文仅保留 post-heading 与 blog-post）"
+    description = u"RSS 拉文章 -> 文章页解析分类 -> 按分类生成 EPUB 目录（仅保留 post-heading 与 blog-post）"
     language = "zh-CN"
 
     SITE_ROOT = "https://tiny-lamb-reformed.github.io"
@@ -21,18 +21,18 @@ class TinyLambRecipe(BasicNewsRecipe):
     MAX_TOTAL_ARTICLES = 800
     MAX_ARTICLES_PER_CATEGORY = 200
 
-    # 注意：这里必须是集合/可迭代，不要写 True
-    ignore_duplicate_articles = {'url'}  # 文档示例就是这样写的 :contentReference[oaicite:2]{index=2}
-
     remove_javascript = True
     no_stylesheets = False
-    auto_cleanup = False  # 我们要精确保留两个块，不用 readability 自动清理
+    auto_cleanup = False  # 我们自己精确裁剪 HTML
 
-    feeds = []
+    feeds = []  # 不用内置 feeds
 
-    # ---------- 网络/解析 ----------
+    # -----------------------
+    # 网络 / 解析
+    # -----------------------
 
     def _open_url(self, url):
+        # mechanize 对目录 URL 有时 404，做 index.html 兜底
         tried = []
 
         def try_one(u):
@@ -54,20 +54,23 @@ class TinyLambRecipe(BasicNewsRecipe):
                     pass
                 raise
 
-    def _soup(self, url):
-        raw = self._open_url(url)
+    def _soup_from_bytes(self, raw):
         from bs4 import BeautifulSoup
         return BeautifulSoup(raw, "html.parser")
+
+    def _soup(self, url):
+        return self._soup_from_bytes(self._open_url(url))
 
     def _norm_ws(self, s):
         return re.sub(r"\s+", " ", (s or "").strip())
 
-    # ---------- 关键：正文只保留两块 ----------
+    # -----------------------
+    # 关键：只保留两个块
+    # -----------------------
 
     def preprocess_html(self, soup):
         """
-        只保留 class=post-heading 和 class=blog-post 的内容。
-        这是对每篇文章页生效的强制清洗。:contentReference[oaicite:3]{index=3}
+        对每篇文章生效：只保留 class=post-heading 与 class=blog-post
         """
         try:
             body = soup.body
@@ -75,13 +78,10 @@ class TinyLambRecipe(BasicNewsRecipe):
                 return soup
 
             keep = []
+            for cls in ("post-heading", "blog-post"):
+                keep.extend(soup.find_all(class_=cls))
 
-            # 先标题块，再正文块（保持阅读顺序）
-            for cls in ("post-heading", "post-meta", "blog-post"):
-                for tag in soup.find_all(class_=cls):
-                    keep.append(tag)
-
-            # 如果完全没找到（比如页面结构变了），就别清空，避免输出空白文章
+            # 找不到就不裁剪，避免输出空白
             if not keep:
                 return soup
 
@@ -90,16 +90,22 @@ class TinyLambRecipe(BasicNewsRecipe):
                 body.append(tag)
 
         except Exception:
-            # 出错时宁可保留原文，避免整篇文章空掉
             return soup
 
         return soup
 
-    # ---------- URL 规范化，统一到 /zh-cn/posts/ ----------
+    # -----------------------
+    # URL 统一 / 去重
+    # -----------------------
 
     def _canonical_post_url(self, link):
+        """
+        把 /posts/<slug>/ 和 /zh-cn/posts/<slug>/ 全部统一为 /zh-cn/posts/<slug>/
+        解决你说的：同文下载两次 + /posts/ 那套标题繁中/异常
+        """
         if not link:
             return None
+
         url = urljoin(self.SITE_ROOT, link)
         p = urlparse(url)
         path = p.path or ""
@@ -111,9 +117,14 @@ class TinyLambRecipe(BasicNewsRecipe):
         slug = m.group(1)
         return "{}/zh-cn/posts/{}/".format(self.SITE_ROOT, slug)
 
-    # ---------- RSS 解析 ----------
+    # -----------------------
+    # RSS 解析
+    # -----------------------
 
     def _parse_rss_entries(self, rss_bytes):
+        """
+        返回 [(title, link, date_str), ...]
+        """
         try:
             import feedparser
             f = feedparser.parse(rss_bytes)
@@ -129,6 +140,7 @@ class TinyLambRecipe(BasicNewsRecipe):
         except Exception:
             pass
 
+        # fallback：简单正则
         txt = rss_bytes.decode("utf-8", "ignore")
         items = re.findall(r"<item\b.*?>.*?</item>", txt, flags=re.S | re.I)
         out = []
@@ -141,3 +153,97 @@ class TinyLambRecipe(BasicNewsRecipe):
             date = self._norm_ws(d.group(1)) if d else ""
             if title and link:
                 out.append((title, link, date))
+        return out
+
+    # -----------------------
+    # 从文章页解析分类（用于目录分组）
+    # -----------------------
+
+    def _pick_categories_from_article(self, article_url):
+        soup = self._soup(article_url)
+
+        cats = []
+        for a in soup.find_all("a", href=True):
+            href = (a.get("href") or "").strip()
+            if "/zh-cn/categories/" not in href:
+                continue
+            if href.rstrip("/").endswith("/zh-cn/categories"):
+                continue
+            txt = self._norm_ws(a.get_text())
+            if txt:
+                cats.append(txt)
+
+        # 去重保持顺序
+        out, seen = [], set()
+        for c in cats:
+            if c not in seen:
+                seen.add(c)
+                out.append(c)
+        return out
+
+    # -----------------------
+    # 目录分组：分类 -> 文章列表
+    # -----------------------
+
+    def parse_index(self):
+        rss_bytes = self._open_url(self.RSS_URL)
+        entries = self._parse_rss_entries(rss_bytes)
+
+        if self.MAX_TOTAL_ARTICLES and len(entries) > self.MAX_TOTAL_ARTICLES:
+            entries = entries[: self.MAX_TOTAL_ARTICLES]
+
+        grouped = OrderedDict()
+        global_seen = set()  # 规范化 URL 全局去重
+
+        for (title, link, date) in entries:
+            canon_url = self._canonical_post_url(link)
+            if not canon_url:
+                continue
+
+            if canon_url in global_seen:
+                continue
+            global_seen.add(canon_url)
+
+            try:
+                cats = self._pick_categories_from_article(canon_url)
+            except Exception:
+                cats = []
+
+            if not cats:
+                cats = [u"未分类"]
+
+            # 多分类文章：放到所有分类目录
+            for cat in cats:
+                grouped.setdefault(cat, [])
+                grouped[cat].append({
+                    "title": title,      # 用 RSS 标题（你说这套是正常的）
+                    "url": canon_url,    # 统一 zh-cn，避免 /posts/ 版本
+                    "date": date,
+                    "description": "",
+                })
+
+        feeds = []
+        for cat, arts in grouped.items():
+            if self.MAX_ARTICLES_PER_CATEGORY:
+                arts = arts[: self.MAX_ARTICLES_PER_CATEGORY]
+            if arts:
+                feeds.append((cat, arts))
+        return feeds
+
+    # -----------------------
+    # 关键修复：你这版 calibre 会走 parse_feeds()->get_feeds()
+    # 所以我们重写 parse_feeds()，让它用 parse_index() 构建 Feed 对象
+    # -----------------------
+
+    def parse_feeds(self):
+        """
+        把 parse_index() 的 (title, [article dict...]) 转成 calibre Feed 对象列表。
+        这样 build_index() 即使走 parse_feeds，也不会触发 get_feeds()。
+        """
+        from calibre.web.feeds.news import Feed
+
+        out = []
+        for feed_title, articles in self.parse_index():
+            f = Feed(feed_title, articles)
+            out.append(f)
+        return out
