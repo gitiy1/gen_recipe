@@ -10,135 +10,140 @@ from calibre.web.feeds.news import BasicNewsRecipe
 
 
 class TinyLambRecipe(BasicNewsRecipe):
+
+    # ========= 基本信息 =========
     title = u"基督教小小羊园地（按分类目录）"
-    description = u"从分类页面抓取结构，按分类生成目录并制作 EPUB"
+    description = u"从分类页面抓取文章，按分类生成 EPUB 目录"
     language = "zh-CN"
 
-    # 你可以按需调整这些
+    # ========= 站点配置 =========
     SITE_ROOT = "https://tiny-lamb-reformed.github.io"
     CATEGORIES_INDEX = "https://tiny-lamb-reformed.github.io/zh-cn/categories/"
 
-    MAX_ARTICLES_PER_CATEGORY = 200     # 每个分类最多收多少篇（0 或 None 表示不限制）
-    MAX_PAGES_PER_CATEGORY = 50         # 每个分类最多翻多少分页，避免死循环
+    # 每个分类最多抓多少篇（None 或 0 表示不限制）
+    MAX_ARTICLES_PER_CATEGORY = 200
 
-    # 清理相关（可按需关/开）
+    # 每个分类最多翻多少页（防止死循环）
+    MAX_PAGES_PER_CATEGORY = 50
+
+    # ========= Calibre 行为 =========
+    feeds = []                  # 不用 RSS feeds，改用 parse_index
     remove_javascript = True
     no_stylesheets = False
     auto_cleanup = True
 
-    # 不用 feeds 模式，改用 parse_index 构建“分类 -> 文章列表”
-    feeds = []
+    # ========= 工具函数 =========
 
     def _soup(self, url):
-        """Fetch url and return BeautifulSoup."""
+        """
+        拉取页面并返回 BeautifulSoup
+        使用 html.parser，避免 runner 没装 lxml
+        """
         raw = self.browser.open(url).read()
-        # calibre 环境一般自带 bs4
         from bs4 import BeautifulSoup
-        return BeautifulSoup(raw, "lxml")
+        return BeautifulSoup(raw, "html.parser")
 
     def _clean_category_title(self, text):
         """
-        分类页显示类似：'教会流行观念的偏差 493'
-        去掉末尾的数字计数。
+        分类名形如：'教会流行观念的偏差 493'
+        去掉末尾数字
         """
         if not text:
             return None
         t = re.sub(r"\s+", " ", text).strip()
-        t = re.sub(r"\s+\d+\s*$", "", t).strip()
-        return t or None
+        t = re.sub(r"\s+\d+\s*$", "", t)
+        return t.strip() or None
 
-    def _extract_date_near_link(self, a_tag):
+    def _find_next_page(self, soup, current_url):
         """
-        尝试从文章链接附近提取日期（如 2024-11-30）。
-        找不到就返回空串。
+        查找“下一页 →”
         """
-        # 在同一块里找一段文本，尽量稳一点
-        block_text = ""
+        for a in soup.find_all("a", href=True):
+            txt = a.get_text(" ", strip=True) or ""
+            if "下一页" in txt:
+                return urljoin(current_url, a["href"])
+        return None
+
+    def _extract_date_near_link(self, a):
+        """
+        从文章链接附近文本中找 YYYY-MM-DD
+        """
         try:
-            parent = a_tag.parent
-            # 向上多拿一点文本
-            block_text = parent.get_text(" ", strip=True) if parent else ""
-            if not block_text and parent and parent.parent:
-                block_text = parent.parent.get_text(" ", strip=True)
+            texts = []
+            if a.parent:
+                texts.append(a.parent.get_text(" ", strip=True))
+            if a.parent and a.parent.parent:
+                texts.append(a.parent.parent.get_text(" ", strip=True))
+            block = " ".join(texts)
         except Exception:
-            block_text = ""
-        m = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", block_text)
+            block = ""
+        m = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", block)
         return m.group(1) if m else ""
 
-    def _extract_description_near_link(self, a_tag):
+    def _extract_description_near_link(self, a):
         """
-        尝试拿文章摘要（分类列表里的那段 preview）。
-        拿不到就空。
+        尝试拿分类页中的摘要
         """
         try:
-            # 分类页结构通常是：<a>标题</a> 之后几行是日期与摘要
-            # 这里简单取父节点/祖父节点文本并去掉标题本身
-            parent = a_tag.parent
+            parent = a.parent
             text = parent.get_text(" ", strip=True) if parent else ""
-            title = a_tag.get_text(" ", strip=True) if a_tag else ""
-            if title and text.startswith(title):
-                text = text[len(title):].strip(" -|•\u00a0")
-            # 缩短一点，避免太长
-            text = re.sub(r"\s+", " ", text).strip()
+            title = a.get_text(" ", strip=True)
+            if title and title in text:
+                text = text.replace(title, "", 1)
+            text = re.sub(r"\s+", " ", text).strip(" -|•\u00a0")
             return text[:240]
         except Exception:
             return ""
 
-    def _find_next_page(self, soup, current_url):
-        """
-        在分类页底部找“下一页 →”链接。
-        """
-        # 页面里一般有 “下一页 →”
-        for a in soup.find_all("a", href=True):
-            txt = a.get_text(" ", strip=True)
-            if txt and ("下一页" in txt or "Next" in txt or "→" == txt):
-                href = a["href"]
-                # 只接受相对/站内链接
-                nxt = urljoin(current_url, href)
-                if nxt.startswith(self.SITE_ROOT):
-                    return nxt
-        return None
+    # ========= 核心逻辑 =========
 
     def parse_index(self):
         """
-        返回格式：[(分类名, [文章dict...]), ...]
-        这是 calibre 生成目录章节的关键：每个“分类名”会变成 TOC 的一级节点。
+        返回：
+        [
+          (分类名, [
+              {title, url, date, description},
+              ...
+          ]),
+          ...
+        ]
+        —— 每个分类就是 EPUB 的一级目录
         """
+
         index_soup = self._soup(self.CATEGORIES_INDEX)
 
-        # 收集分类链接：/zh-cn/categories/<name>/
+        # ---- 1. 抓分类列表 ----
         categories = []
         seen_cat_urls = set()
 
         for a in index_soup.find_all("a", href=True):
-            href = a["href"].strip()
-            # categories 列表里会出现很多其他链接；这里做严格一点
+            href = (a.get("href") or "").strip()
             if "/zh-cn/categories/" not in href:
                 continue
 
-            cat_url = urljoin(self.CATEGORIES_INDEX, href)
-
-            # 排除分类索引自身
+            cat_url = urljoin(self.CATEGORIES_INDEX, href).split("#", 1)[0]
             if cat_url.rstrip("/") == self.CATEGORIES_INDEX.rstrip("/"):
                 continue
-
-            # 只要具体分类页（通常以 /zh-cn/categories/<term>/ 形式出现）
             if not cat_url.startswith(self.CATEGORIES_INDEX):
                 continue
 
-            cat_title = self._clean_category_title(a.get_text(" ", strip=True))
+            cat_title = self._clean_category_title(
+                a.get_text(" ", strip=True)
+            )
             if not cat_title:
                 continue
 
             if cat_url in seen_cat_urls:
                 continue
+
             seen_cat_urls.add(cat_url)
             categories.append((cat_title, cat_url))
 
-        # 逐分类抓文章
+        # ---- 2. 逐分类抓文章 ----
         feeds = []
+        post_href_re = re.compile(r"/posts/")
 
-        for (cat_title, cat_url) in categories:
+        for cat_title, cat_url in categories:
             articles = []
             seen_posts = set()
 
@@ -149,50 +154,51 @@ class TinyLambRecipe(BasicNewsRecipe):
                 pages += 1
                 soup = self._soup(page_url)
 
-                # 分类页文章链接一般指向 /zh-cn/posts/...
                 for a in soup.find_all("a", href=True):
-                    href = a["href"].strip()
-                    if "/zh-cn/posts/" not in href:
+                    href = (a.get("href") or "").strip()
+                    if not post_href_re.search(href):
                         continue
-                    post_url = urljoin(page_url, href)
+
+                    post_url = urljoin(page_url, href).split("#", 1)[0]
                     if not post_url.startswith(self.SITE_ROOT):
                         continue
-
-                    # 标题
-                    post_title = a.get_text(" ", strip=True)
-                    post_title = re.sub(r"\s+", " ", post_title).strip()
-                    if not post_title:
-                        continue
-
                     if post_url in seen_posts:
                         continue
+
+                    title = re.sub(
+                        r"\s+",
+                        " ",
+                        a.get_text(" ", strip=True)
+                    ).strip()
+                    if not title:
+                        continue
+
                     seen_posts.add(post_url)
-
-                    date_str = self._extract_date_near_link(a)
-                    desc = self._extract_description_near_link(a)
-
                     articles.append({
-                        "title": post_title,
+                        "title": title,
                         "url": post_url,
-                        "date": date_str,
-                        "description": desc,
+                        "date": self._extract_date_near_link(a),
+                        "description": self._extract_description_near_link(a),
                     })
 
-                    if self.MAX_ARTICLES_PER_CATEGORY and len(articles) >= self.MAX_ARTICLES_PER_CATEGORY:
+                    if (
+                        self.MAX_ARTICLES_PER_CATEGORY
+                        and len(articles) >= self.MAX_ARTICLES_PER_CATEGORY
+                    ):
                         break
 
-                if self.MAX_ARTICLES_PER_CATEGORY and len(articles) >= self.MAX_ARTICLES_PER_CATEGORY:
+                if (
+                    self.MAX_ARTICLES_PER_CATEGORY
+                    and len(articles) >= self.MAX_ARTICLES_PER_CATEGORY
+                ):
                     break
 
-                # 下一页
                 next_url = self._find_next_page(soup, page_url)
-                # 防止循环
                 if next_url and next_url != page_url:
                     page_url = next_url
                 else:
                     page_url = None
 
-            # 如果某分类没抓到文章，就不加（也可以保留空章节，看你需求）
             if articles:
                 feeds.append((cat_title, articles))
 
