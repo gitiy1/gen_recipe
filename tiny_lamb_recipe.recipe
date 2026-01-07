@@ -4,7 +4,8 @@
 from __future__ import unicode_literals
 
 import re
-from urllib.parse import urljoin, quote
+from collections import OrderedDict
+from urllib.parse import urljoin
 
 from calibre.web.feeds.news import BasicNewsRecipe
 
@@ -12,32 +13,30 @@ from calibre.web.feeds.news import BasicNewsRecipe
 class TinyLambRecipe(BasicNewsRecipe):
     # ========= 基本信息 =========
     title = u"基督教小小羊园地（按分类目录）"
-    description = u"从分类页面抓取分类结构，按分类生成 EPUB 目录"
+    description = u"通过 RSS 抓取文章，再从文章页解析分类，按分类生成 EPUB 目录"
     language = "zh-CN"
 
     # ========= 站点配置 =========
     SITE_ROOT = "https://tiny-lamb-reformed.github.io"
-    CATEGORIES_INDEX = "https://tiny-lamb-reformed.github.io/zh-cn/categories/"
+    RSS_URL = "https://tiny-lamb-reformed.github.io/zh-cn/index.xml"
 
     # 每个分类最多抓多少篇（None/0 表示不限制）
-    MAX_ARTICLES_PER_CATEGORY = 0
-    # 每个分类最多翻多少页（防止死循环）
-    MAX_PAGES_PER_CATEGORY = 50
+    MAX_ARTICLES_PER_CATEGORY = 200
+    # RSS 最多取多少篇（避免一次拉太多）
+    MAX_TOTAL_ARTICLES = 800
 
     # ========= Calibre 行为 =========
-    feeds = []  # 不走 RSS feeds，走 parse_index
+    feeds = []  # 用 parse_index() 直接返回 (分类, 文章列表)
     remove_javascript = True
     no_stylesheets = False
     auto_cleanup = True
+    ignore_duplicate_articles = True
 
     # ========= 工具函数 =========
 
     def _open_url(self, url):
         """
-        mechanize 在 GitHub Pages 上对“目录型 URL”可能 404。
-        这里做容错：
-        1) 试 url
-        2) 试 url + 'index.html'
+        mechanize 有时对目录型 URL 不走 index.html，做个兜底。
         """
         tried = []
 
@@ -45,18 +44,14 @@ class TinyLambRecipe(BasicNewsRecipe):
             tried.append(u)
             return self.browser.open(u).read()
 
-        # 1) 原 URL
         try:
             return try_one(url)
-        except Exception as e1:
-            # 2) index.html 兜底
+        except Exception:
             try:
                 if url.endswith("/"):
                     return try_one(url + "index.html")
-                else:
-                    return try_one(url + "/index.html")
+                return try_one(url + "/index.html")
             except Exception as e2:
-                # 打印更有用的日志
                 try:
                     self.log("Failed URLs: {}".format(tried))
                     self.log("Last error: {}".format(e2))
@@ -64,194 +59,134 @@ class TinyLambRecipe(BasicNewsRecipe):
                     pass
                 raise
 
-    def _soup(self, url):
-        raw = self._open_url(url)
+    def _soup(self, url_or_bytes):
         from bs4 import BeautifulSoup
+        if isinstance(url_or_bytes, (bytes, bytearray)):
+            return BeautifulSoup(url_or_bytes, "html.parser")
+        raw = self._open_url(url_or_bytes)
         return BeautifulSoup(raw, "html.parser")
 
-    def _clean_category_title(self, text):
-        """
-        分类名形如：'教会流行观念的偏差 493'
-        去掉末尾计数，返回 '教会流行观念的偏差'
-        """
-        if not text:
-            return None
-        t = re.sub(r"\s+", " ", text).strip()
-        t = re.sub(r"\s+\d+\s*$", "", t).strip()
-        return t or None
+    def _norm_ws(self, s):
+        return re.sub(r"\s+", " ", (s or "").strip())
 
-    def _category_term_url_candidates(self, cat_title):
+    def _pick_categories_from_article_html(self, article_url):
         """
-        Hugo taxonomy term URL：/zh-cn/categories/<term>/
-        但 GitHub Pages + mechanize 有时对编码/目录映射不一致：
-        - 试 percent-encoding
-        - 试原始中文路径
-        - 两者都再试 index.html（由 _open_url 负责）
+        从文章页解析分类：
+        - 常见形式：页面里会有指向 /zh-cn/categories/<something>/ 的 <a>
+        - 我们抓这些链接的文本作为分类名
         """
-        encoded = quote(cat_title, safe="")
-        u1 = urljoin(self.CATEGORIES_INDEX, encoded + "/")
-        u2 = urljoin(self.CATEGORIES_INDEX, cat_title + "/")
+        soup = self._soup(article_url)
+        cats = []
+
+        for a in soup.find_all("a", href=True):
+            href = (a.get("href") or "").strip()
+            if "/zh-cn/categories/" not in href:
+                continue
+            # 过滤掉 categories 索引页本身
+            if href.rstrip("/").endswith("/zh-cn/categories"):
+                continue
+            txt = self._norm_ws(a.get_text())
+            if not txt:
+                continue
+            cats.append(txt)
+
         # 去重保持顺序
         out = []
-        for u in (u1, u2):
-            if u not in out:
-                out.append(u)
+        seen = set()
+        for c in cats:
+            if c not in seen:
+                seen.add(c)
+                out.append(c)
+
         return out
 
-    def _find_next_page(self, soup, current_url):
+    def _parse_rss_entries(self, rss_bytes):
         """
-        在分类页底部找 “下一页 →”
+        尽量用 feedparser；如果环境里没有就 fallback 用简单正则解析。
+        返回 [(title, link, date_str), ...]
         """
-        for a in soup.find_all("a", href=True):
-            txt = a.get_text(" ", strip=True) or ""
-            if "下一页" in txt:
-                return urljoin(current_url, a["href"])
-        return None
-
-    def _extract_date_near_link(self, a):
-        """
-        从文章链接附近文本中找 YYYY-MM-DD
-        """
+        # 1) feedparser
         try:
-            texts = []
-            if a.parent:
-                texts.append(a.parent.get_text(" ", strip=True))
-            if a.parent and a.parent.parent:
-                texts.append(a.parent.parent.get_text(" ", strip=True))
-            block = " ".join(texts)
+            import feedparser  # calibre 环境通常有
+            f = feedparser.parse(rss_bytes)
+            entries = []
+            for e in f.entries:
+                title = self._norm_ws(getattr(e, "title", ""))
+                link = getattr(e, "link", "") or ""
+                # published / updated 取一个
+                date = getattr(e, "published", "") or getattr(e, "updated", "") or ""
+                date = self._norm_ws(date)
+                if title and link:
+                    entries.append((title, link, date))
+            return entries
         except Exception:
-            block = ""
-        m = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", block)
-        return m.group(1) if m else ""
+            pass
 
-    def _extract_description_near_link(self, a):
-        """
-        尝试拿分类页中的摘要（抓不到也没关系）
-        """
-        try:
-            parent = a.parent
-            text = parent.get_text(" ", strip=True) if parent else ""
-            title = a.get_text(" ", strip=True)
-            if title and title in text:
-                text = text.replace(title, "", 1)
-            text = re.sub(r"\s+", " ", text).strip(" -|•\u00a0")
-            return text[:240]
-        except Exception:
-            return ""
-
-    def _discover_categories(self, index_soup):
-        """
-        /zh-cn/categories/ 页面分类列表是纯文本 li（不是链接）。
-        从 li 文本解析分类名，然后自己拼 term URL。
-        """
-        categories = []
-        seen_titles = set()
-
-        for li in index_soup.find_all("li"):
-            txt = li.get_text(" ", strip=True) or ""
-            # 典型分类行末尾是数字计数
-            if not re.search(r"\s\d+\s*$", txt):
-                continue
-            cat_title = self._clean_category_title(txt)
-            if not cat_title:
-                continue
-            if cat_title in seen_titles:
-                continue
-            seen_titles.add(cat_title)
-            categories.append(cat_title)
-
-        return categories
+        # 2) fallback: 简单从 <item> 里抓 <title><link><pubDate>（够用）
+        txt = rss_bytes.decode("utf-8", "ignore")
+        items = re.findall(r"<item\b.*?>.*?</item>", txt, flags=re.S | re.I)
+        entries = []
+        for it in items:
+            t = re.search(r"<title\b.*?>(.*?)</title>", it, flags=re.S | re.I)
+            l = re.search(r"<link\b.*?>(.*?)</link>", it, flags=re.S | re.I)
+            d = re.search(r"<pubDate\b.*?>(.*?)</pubDate>", it, flags=re.S | re.I)
+            title = self._norm_ws(t.group(1)) if t else ""
+            link = self._norm_ws(l.group(1)) if l else ""
+            date = self._norm_ws(d.group(1)) if d else ""
+            if title and link:
+                entries.append((title, link, date))
+        return entries
 
     # ========= 核心逻辑 =========
 
     def parse_index(self):
         """
-        返回：
+        通过 RSS 得到文章列表 -> 逐篇解析分类 -> 按分类分组返回
+        返回格式：
         [
           (分类名, [ {title,url,date,description}, ... ]),
           ...
         ]
-        —— 每个分类就是 EPUB 的一级目录
         """
-        # 先抓分类索引（带 index.html 容错）
-        index_soup = self._soup(self.CATEGORIES_INDEX)
-        cat_titles = self._discover_categories(index_soup)
+        rss_bytes = self._open_url(self.RSS_URL)
+        entries = self._parse_rss_entries(rss_bytes)
 
+        if self.MAX_TOTAL_ARTICLES and len(entries) > self.MAX_TOTAL_ARTICLES:
+            entries = entries[: self.MAX_TOTAL_ARTICLES]
+
+        # 分类 -> articles（OrderedDict 保持插入顺序）
+        grouped = OrderedDict()
+
+        for (title, link, date) in entries:
+            # 统一成绝对 URL
+            url = urljoin(self.SITE_ROOT, link)
+
+            # 从文章页解析分类
+            try:
+                cats = self._pick_categories_from_article_html(url)
+            except Exception:
+                cats = []
+
+            if not cats:
+                cats = [u"未分类"]
+
+            # 多分类文章：为了目录完整性，这里“复制到每个分类”
+            # 如果你不想重复，可改成只取 cats[0]
+            for cat in cats:
+                grouped.setdefault(cat, [])
+                grouped[cat].append({
+                    "title": title,
+                    "url": url,
+                    "date": date,
+                    "description": "",
+                })
+
+        # 每个分类限制篇数
         feeds = []
-        post_href_re = re.compile(r"/posts/")
-
-        for cat_title in cat_titles:
-            # 找到一个能打开的分类 URL（编码/不编码 两种都试）
-            cat_url = None
-            for cand in self._category_term_url_candidates(cat_title):
-                try:
-                    # 试探性打开，能打开就用
-                    self._open_url(cand)
-                    cat_url = cand
-                    break
-                except Exception:
-                    continue
-
-            if not cat_url:
-                # 这个分类打不开就跳过
-                try:
-                    self.log("Skip category (cannot open): {}".format(cat_title))
-                except Exception:
-                    pass
-                continue
-
-            articles = []
-            seen_posts = set()
-
-            page_url = cat_url
-            pages = 0
-
-            while page_url and pages < self.MAX_PAGES_PER_CATEGORY:
-                pages += 1
-                soup = self._soup(page_url)
-
-                for a in soup.find_all("a", href=True):
-                    href = (a.get("href") or "").strip()
-                    # 文章链接：匹配 /posts/（可覆盖 ../../posts/...）
-                    if not post_href_re.search(href):
-                        continue
-
-                    post_url = urljoin(page_url, href).split("#", 1)[0]
-                    if not post_url.startswith(self.SITE_ROOT):
-                        continue
-                    if post_url in seen_posts:
-                        continue
-
-                    title = re.sub(r"\s+", " ", a.get_text(" ", strip=True)).strip()
-                    if not title:
-                        continue
-
-                    seen_posts.add(post_url)
-                    articles.append({
-                        "title": title,
-                        "url": post_url,
-                        "date": self._extract_date_near_link(a),
-                        "description": self._extract_description_near_link(a),
-                    })
-
-                    if self.MAX_ARTICLES_PER_CATEGORY and len(articles) >= self.MAX_ARTICLES_PER_CATEGORY:
-                        break
-
-                if self.MAX_ARTICLES_PER_CATEGORY and len(articles) >= self.MAX_ARTICLES_PER_CATEGORY:
-                    break
-
-                next_url = self._find_next_page(soup, page_url)
-                if next_url and next_url != page_url:
-                    page_url = next_url
-                else:
-                    page_url = None
-
-            if articles:
-                feeds.append((cat_title, articles))
-            else:
-                try:
-                    self.log("Category has no articles (parsed): {}".format(cat_title))
-                except Exception:
-                    pass
+        for cat, arts in grouped.items():
+            if self.MAX_ARTICLES_PER_CATEGORY:
+                arts = arts[: self.MAX_ARTICLES_PER_CATEGORY]
+            if arts:
+                feeds.append((cat, arts))
 
         return feeds
