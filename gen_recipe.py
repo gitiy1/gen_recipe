@@ -69,6 +69,7 @@ def generate_smart_recipe(domain, filename):
 
     cat_data_list.sort(key=lambda x: x['name'])
     
+    # 将复杂的配置注入到字符串中
     recipe_code = f"""import feedparser
 import math
 import time
@@ -109,37 +110,58 @@ class MyFeed:
     def has_embedded_content(self): return False
     def is_empty(self): return len(self.articles) == 0
 
-class JidujiaoLite(BasicNewsRecipe):
-    title          = '基督教教育网 (墨水屏精简版)'
-    description    = '全站内容 - 极致优化：去样式、灰度图片、纯净排版'
+class JidujiaoPro(BasicNewsRecipe):
+    title          = '基督教教育网 (DOM 定制版)'
+    description    = '仅保留标题、描述、分类、标签和正文。'
     language       = 'zh'
     encoding       = 'utf-8'
     oldest_article = 36500
     max_articles_per_feed = 1000
     
-    # --- 核心优化配置 (瘦身关键) ---
-    
-    # 1. 自动清理: 必须开启，这是提取正文的基础
-    auto_cleanup = True
-    
-    # 2. 移除所有 CSS: 墨水屏不需要花哨的网页样式，这能极大提升渲染速度
+    # --- 1. 关闭自动清理 (我们要手动手术) ---
+    auto_cleanup = False
+
+    # --- 2. 墨水屏优化 ---
     no_stylesheets = True
-    
-    # 3. 移除 JavaScript: 电子书不需要脚本
     remove_javascript = True
-    
-    # 4. 图片优化: 
-    # compress_news_images = True 会自动把图片转为灰度并压缩
     compress_news_images = True
-    # 限制图片最大尺寸: 宽 800, 高 1000 (适合 Kindle Paperwhite/Oasis)
-    # 超过这个尺寸的大图会被缩小，极大减小体积
     scale_news_images = (800, 1000)
-    
-    # 5. 清理 HTML 标签属性:
-    # 移除所有内联 style, width, height (让阅读器自己决定排版)
-    remove_attributes = ['style', 'width', 'height', 'align', 'class', 'id']
-    
-    # 6. 抓取稳定性配置
+    remove_attributes = ['style', 'width', 'height', 'align']
+
+    # --- 3. DOM 级精准保留 (白名单) ---
+    # Calibre 会丢弃除此之外的所有 HTML
+    keep_only_tags = [
+        # 兼容常见的 H1 标题写法，以及用户指定的 page-title
+        dict(name='h1'), 
+        dict(attrs={{'class': lambda x: x and 'page-title' in x}}),
+        
+        # 页面描述
+        dict(attrs={{'class': lambda x: x and 'page-description' in x}}),
+        
+        # 分类信息
+        dict(attrs={{'class': lambda x: x and 'meta-categories' in x}}),
+        
+        # 标签
+        dict(attrs={{'class': lambda x: x and 'entry-tags' in x}}),
+        
+        # 正文核心
+        dict(attrs={{'class': lambda x: x and 'entry-content' in x}}),
+    ]
+
+    # --- 4. DOM 级精准剔除 (黑名单) ---
+    # 这些元素即使在上面的保留区域内，也会被强制挖掉
+    remove_tags = [
+        # 移除文章内的目录插件块
+        dict(attrs={{'class': lambda x: x and 'wp-block-uagb-table-of-contents' in x}}),
+        
+        # 移除特定的无用图片 (wp-image-5896)
+        dict(attrs={{'class': lambda x: x and 'wp-image-5896' in x}}),
+        
+        # 额外移除常见的干扰元素，以防万一
+        dict(name=['script', 'style', 'noscript', 'iframe', 'nav', 'footer']),
+        dict(attrs={{'class': ['sharedaddy', 'related-posts', 'post-navigation']}})
+    ]
+
     timeout = 120
     simultaneous_downloads = 5
 
@@ -195,7 +217,7 @@ class JidujiaoLite(BasicNewsRecipe):
 """
     with open(filename, "w", encoding="utf-8") as f:
         f.write(recipe_code)
-    print(f"成功生成墨水屏专用版 Recipe: {filename}")
+    print(f"成功生成 DOM 定制版 Recipe: {filename}")
 
 if __name__ == "__main__":
     generate_smart_recipe(TARGET_DOMAIN, RECIPE_FILENAME)
