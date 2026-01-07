@@ -76,25 +76,31 @@ import math
 import time
 from calibre.web.feeds.news import BasicNewsRecipe
 
-# --- 自定义 Article 类 ---
+# --- 自定义 Article 类 (全属性补全版) ---
 class MyArticle:
     def __init__(self, title, url, description, author, published, content):
         self.title = title
         self.url = url
         self.description = description
         self.summary = description 
+        
+        # 关键修复：添加 text_summary
+        self.text_summary = description
+        
         self.author = author
         self.published = published
         
-        # 关键修复：添加 formatted_date
-        # 如果 published 是空字符串，给一个默认值，防止后续报错
+        # 之前修复的日期
         self.formatted_date = published if published else 'Unknown Date'
         
         self.content = content
         self.text = content
+        
+        # 预防性补全其他属性
         self.id = None
         self.date = None
-        self.downloaded = True # 标记为待下载/已下载状态
+        self.downloaded = True
+        self.orig_url = url  # 有时候 Calibre 需要原始链接
 
 # --- 自定义 Feed 类 ---
 class MyFeed:
@@ -128,10 +134,8 @@ class JidujiaoChronological(BasicNewsRecipe):
     oldest_article = 36500
     max_articles_per_feed = 1000
     
-    # 开启自动清理 (Fetch 原文的核心)
     auto_cleanup   = True
     
-    # 稍微增加超时时间，防止网络波动
     timeout        = 60
     simultaneous_downloads = 5
 
@@ -208,7 +212,7 @@ class JidujiaoChronological(BasicNewsRecipe):
 """
     with open(filename, "w", encoding="utf-8") as f:
         f.write(recipe_code)
-    print(f"成功生成终极修正版 Recipe: {filename}")
+    print(f"成功生成 v6.0 Recipe: {filename}")
 
 if __name__ == "__main__":
     generate_smart_recipe(TARGET_DOMAIN, RECIPE_FILENAME)
