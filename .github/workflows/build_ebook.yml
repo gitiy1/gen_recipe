@@ -6,7 +6,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+  id-token: write
 
 jobs:
   build:
@@ -37,7 +38,7 @@ jobs:
       run: |
         # 移除了 -vv (详细日志)，只保留默认输出
         # 将 --output-profile 改为 kindle_pw (适合高分屏墨水屏)
-        nix develop --command xvfb-run ebook-convert site.recipe Jidujiao_Education.epub -v --output-profile=kindle_pw
+        nix develop --command xvfb-run ebook-convert site.recipe Jidujiao_Education.epub --output-profile=kindle_pw
 
     - name: Upload Ebook Artifact
       uses: actions/upload-artifact@v4
