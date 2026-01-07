@@ -1,8 +1,8 @@
 name: Build Ebook with Nix
 
 on:
-  schedule:
-    - cron: '0 0 * * *'
+  # schedule:
+  #   - cron: '0 0 * * *'
   workflow_dispatch:
 
 permissions:
@@ -16,13 +16,11 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    # --- 修复点 1: 更新 Action 版本 ---
     - name: Install Nix
-      uses: determinate-systems/nix-installer-action@main
+      uses: DeterminateSystems/nix-installer-action@main
       
     - name: Setup Magic Nix Cache
-      uses: determinate-systems/magic-nix-cache-action@main
-    # --------------------------------
+      uses: DeterminateSystems/magic-nix-cache-action@main
 
     - name: Generate Recipe File
       run: |
@@ -35,7 +33,6 @@ jobs:
           exit 1
         fi
 
-    # --- 修复点 2 & 3: 减少日志 + 适配墨水屏 ---
     - name: Convert to EPUB
       run: |
         # 移除了 -vv (详细日志)，只保留默认输出
