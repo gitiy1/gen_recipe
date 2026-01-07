@@ -85,12 +85,18 @@ class MyArticle:
         self.summary = description 
         self.author = author
         self.published = published
+        
+        # 关键修复：添加 formatted_date
+        # 如果 published 是空字符串，给一个默认值，防止后续报错
+        self.formatted_date = published if published else 'Unknown Date'
+        
         self.content = content
         self.text = content
         self.id = None
         self.date = None
+        self.downloaded = True # 标记为待下载/已下载状态
 
-# --- 自定义 Feed 类 (已补全所有接口) ---
+# --- 自定义 Feed 类 ---
 class MyFeed:
     def __init__(self, title, articles):
         self.title = title
@@ -108,11 +114,9 @@ class MyFeed:
     def __getitem__(self, index):
         return self.articles[index]
 
-    # 关键修复：告诉 Calibre 我们没有嵌入内容，请去下载网页！
     def has_embedded_content(self):
         return False
         
-    # 预防性补充
     def is_empty(self):
         return len(self.articles) == 0
 
@@ -123,7 +127,11 @@ class JidujiaoChronological(BasicNewsRecipe):
     encoding       = 'utf-8'
     oldest_article = 36500
     max_articles_per_feed = 1000
+    
+    # 开启自动清理 (Fetch 原文的核心)
     auto_cleanup   = True
+    
+    # 稍微增加超时时间，防止网络波动
     timeout        = 60
     simultaneous_downloads = 5
 
@@ -170,7 +178,7 @@ class JidujiaoChronological(BasicNewsRecipe):
                             'author': 'Unknown',
                             'date': date,
                             'date_str': date_str,
-                            'content': '' # 留空，强制下载
+                            'content': '' 
                         }})
                 except Exception as e:
                     print(f"  -> 抓取失败: {{e}}")
@@ -200,7 +208,7 @@ class JidujiaoChronological(BasicNewsRecipe):
 """
     with open(filename, "w", encoding="utf-8") as f:
         f.write(recipe_code)
-    print(f"成功生成补全版 Recipe: {filename}")
+    print(f"成功生成终极修正版 Recipe: {filename}")
 
 if __name__ == "__main__":
     generate_smart_recipe(TARGET_DOMAIN, RECIPE_FILENAME)
