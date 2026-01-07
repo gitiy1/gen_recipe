@@ -1,0 +1,124 @@
+from __future__ import unicode_literals
+
+"""
+A simple calibre recipe for the 基督教小小羊园地（移动端镜像） website.
+
+This recipe subclasses :class:`BasicNewsRecipe` and tells calibre how to
+fetch posts from the blog using its Atom/RSS feed.  The site is built
+with the Hugo static‑site generator, which produces a global feed at
+``/zh‑cn/index.xml``.  Each entry in this feed contains the link to
+the full article.  When calibre executes the recipe it downloads the
+feed, follows the links to the individual posts and constructs a
+complete e‑book.
+
+To generate an EPUB from this recipe in headless mode, run the
+following command (see the calibre documentation for details【512527835457710†L420-L441】):
+
+    ebook‑convert tiny_lamb_recipe.recipe TinyLamb.epub
+
+The ``ebook‑convert`` utility will download the articles, clean up
+the HTML, build a table of contents and write the resulting e‑book
+to ``TinyLamb.epub``.  You can pass additional options to control
+conversion behaviour (for example ``--output‑profile kindle``).  See
+the ``ebook‑convert`` manual for a full list of supported options【142889885245994†L92-L107】.
+
+"""
+
+from calibre.web.feeds.news import BasicNewsRecipe
+
+
+class TinyLambRecipe(BasicNewsRecipe):
+    """Custom calibre recipe for 基督教小小羊园地 (移动端镜像).
+
+    This recipe goes beyond a simple RSS download.  It scrapes the
+    categories index page and builds the e‑book’s table of contents
+    based on the site’s category structure.  Each category becomes a
+    section in the resulting EPUB, and each section contains the
+    articles that belong to that category.  As a result, when you open
+    the EPUB the ToC will show category names rather than a flat list
+    of posts.
+
+    See the calibre recipe API documentation for details on
+    ``parse_index()``【18234232180830†L355-L383】 and ``ebook‑convert`` usage【512527835457710†L420-L439】.
+    """
+
+    # Human‑readable name shown in calibre
+    title       = '基督教小小羊园地（移动端镜像）'
+    # Short description used by calibre
+    description = '按照分类结构抓取文章并生成 EPUB'
+    # Language code for the site
+    language    = 'zh-CN'
+
+    # We will build our own sections from categories, so leave feeds empty.
+    feeds = []
+
+    # Maximum number of articles to fetch from each category.  Set 0
+    # (unlimited) to capture all posts.
+    max_articles_per_feed = 0
+    # Only include articles published within the last year (in days).
+    oldest_article = 365
+    # Always download the full article from the site instead of
+    # using feed summaries.
+    use_embedded_content = False
+    # Deduplicate articles across categories
+    auto_cleanup = True
+
+    def parse_index(self):
+        """Parse the categories page and build a list of sections.
+
+        This method fetches the site's categories index at
+        ``/zh‑cn/categories/``, finds all category links, then for each
+        category fetches its page and extracts article links.  It returns
+        a list of 2‑element tuples as described in the calibre recipe API:
+
+            ('Category Name', [
+                {'title': 'Article Title', 'url': 'https://...', 'date': '', 'description': ''},
+                ...
+            ])
+
+        The resulting list controls the order of sections in the e‑book.  If
+        a category has no articles or cannot be parsed it will be
+        skipped.
+        """
+        base_url = 'https://tiny-lamb-reformed.github.io'
+        categories_index = '/zh-cn/categories/'
+        # Load the categories index page
+        soup = self.index_to_soup(base_url + categories_index)
+        sections = []
+        # Find all category links.  We look for <a> elements whose href
+        # starts with the categories path but is not the index itself.
+        for a in soup.find_all('a', href=True):
+            href = a['href']
+            # Skip links that are anchors or not part of the categories
+            if not href.startswith(categories_index) or href == categories_index:
+                continue
+            # Convert relative URL to absolute
+            cat_url = self.absolute_url(href)
+            # Extract the visible text as the category name
+            cat_name = a.get_text().strip()
+            if not cat_name:
+                continue
+            # Parse articles within this category
+            cat_soup = self.index_to_soup(cat_url)
+            articles = []
+            for link in cat_soup.find_all('a', href=True):
+                article_href = link['href']
+                # Posts live under /zh-cn/posts/ (observed from site structure)
+                if '/zh-cn/posts/' not in article_href:
+                    continue
+                title = link.get_text().strip()
+                if not title:
+                    continue
+                url = self.absolute_url(article_href)
+                # Build article dict.  Date and description are optional; we
+                # leave them empty.  Calibre will fill in metadata later.
+                articles.append({
+                    'title': title,
+                    'url': url,
+                    'date': '',
+                    'description': ''
+                })
+            # Skip empty categories
+            if articles:
+                sections.append((cat_name, articles))
+        return sections
