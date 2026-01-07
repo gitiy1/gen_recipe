@@ -75,7 +75,20 @@ def generate_smart_recipe(domain, filename):
 import math
 import time
 from calibre.web.feeds.news import BasicNewsRecipe
-from calibre.web.feeds import Feed, Article
+# 仅导入 Feed，不再导入 Article，避免版本差异导致的参数报错
+from calibre.web.feeds import Feed
+
+# --- 自定义 Article 类 (Duck Typing) ---
+# Calibre 只要对象有这些属性就能工作，不需要非得是官方 Article 实例
+class MyArticle:
+    def __init__(self, title, url, description, author, published, content):
+        self.title = title
+        self.url = url
+        self.description = description
+        self.author = author
+        self.published = published
+        self.content = content
+        self.id = None # 部分插件可能需要
 
 class JidujiaoChronological(BasicNewsRecipe):
     title          = '基督教教育网 (全站编年史版)'
@@ -100,7 +113,6 @@ class JidujiaoChronological(BasicNewsRecipe):
             base_url = cat['url']
             total_count = cat['count']
             
-            # 计算页数
             pages_needed = math.ceil(total_count / self.RSS_PAGE_SIZE)
             pages_to_fetch = min(pages_needed, self.MAX_PAGES)
             if pages_to_fetch < 1: pages_to_fetch = 1
@@ -109,7 +121,6 @@ class JidujiaoChronological(BasicNewsRecipe):
             
             all_articles = []
             
-            # 循环抓取
             for p in range(1, pages_to_fetch + 1):
                 feed_url = base_url if p == 1 else f"{{base_url}}?paged={{p}}"
                 try:
@@ -121,6 +132,7 @@ class JidujiaoChronological(BasicNewsRecipe):
                         url   = entry.get('link', '')
                         desc  = entry.get('description', '')
                         date  = entry.get('published_parsed', None)
+                        date_str = entry.get('published', '')
                         
                         if not url: continue
                         
@@ -128,27 +140,27 @@ class JidujiaoChronological(BasicNewsRecipe):
                             'title': title,
                             'url': url,
                             'description': desc,
+                            'author': 'Unknown',
                             'date': date,
-                            'date_str': entry.get('published', '')
+                            'date_str': date_str,
+                            'content': ''
                         }})
                 except Exception as e:
                     print(f"  -> 抓取失败: {{e}}")
             
-            # 排序：从旧到新
+            # 排序
             all_articles.sort(key=lambda x: x['date'] if x['date'] else time.localtime(0))
             
             final_articles = []
             for a in all_articles:
-                # --- 关键修复区 ---
-                # Article 构造函数签名: (title, url, description, author, published, content)
-                # 我们之前漏掉了 author，导致参数错位
-                art = Article(
-                    a['title'],       # 1. title
-                    a['url'],         # 2. url
-                    a['description'], # 3. description
-                    'Unknown',        # 4. author (补上这个！)
-                    a['date_str'],    # 5. published
-                    None              # 6. content
+                # 使用我们自定义的 MyArticle 类
+                art = MyArticle(
+                    a['title'],
+                    a['url'],
+                    a['description'],
+                    a['author'],
+                    a['date_str'],
+                    a['content']
                 )
                 final_articles.append(art)
             
