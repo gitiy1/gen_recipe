@@ -160,7 +160,7 @@ class MyFeed:
 
 class JidujiaoSplit(BasicNewsRecipe):
     title          = '{book_title}'
-    description    = '分册版 - DOM 级精准提取与墨水屏优化'
+    description    = '基督教教育网分册版'
     language       = 'zh'
     encoding       = 'utf-8'
     oldest_article = 36500
