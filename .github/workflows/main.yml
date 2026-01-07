@@ -1,12 +1,12 @@
 name: Build Ebook Daily
 
-# 触发条件：
-# 1. 每天 UTC 时间 0点 (北京时间早上8点) 自动运行
-# 2. 也可以手动点击 Star 旁边的 "Run workflow" 按钮触发
 on:
   # schedule:
-  #   - cron: '0 0 * * *'
-  workflow_dispatch:
+  #   - cron: '0 0 * * *' # 每天 UTC 0点运行
+  workflow_dispatch:      # 允许手动触发
+
+permissions:
+  contents: write # 赋予写入权限（如果你以后要发布 release 需要）
 
 jobs:
   build:
@@ -15,11 +15,11 @@ jobs:
     steps:
     # 1. 拉取代码
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4 # 升级到 v4
 
     # 2. 配置 Python 环境
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5 # 升级到 v5
       with:
         python-version: '3.9'
 
@@ -28,38 +28,42 @@ jobs:
       run: |
         pip install requests feedparser
 
-    # 4. 运行你的脚本，生成 .recipe 文件
+    # 4. 运行脚本生成 Recipe
     - name: Generate Recipe File
       run: |
         python gen_recipe.py
         echo "Recipe generated successfully."
-        ls -l site.recipe
+        # 简单检查文件是否存在
+        if [ -f "site.recipe" ]; then
+          echo "site.recipe found."
+        else
+          echo "Error: site.recipe not found!"
+          exit 1
+        fi
 
-    # 5. 安装 Calibre (使用官方静默安装脚本)
+    # 5. 安装 Calibre 系统依赖 (关键修复步骤)
+    # libegl1, libopengl0, libxcb-cursor0 是 Calibre 7.x+ 在 Linux 上的常见依赖
+    - name: Install Calibre Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libegl1 libopengl0 libxcb-cursor0 libxkbcommon-x11-0
+
+    # 6. 安装 Calibre
     - name: Install Calibre
       run: |
         sudo -v && wget -nv -O- https://download.calibre-ebook.com/linux-installer.sh | sudo sh /dev/stdin
 
-    # 6. 使用 ebook-convert 生成电子书
-    # 语法: ebook-convert "输入配方" "输出文件" [参数]
+    # 7. 转换电子书
     - name: Convert Recipe to EPUB
       run: |
-        # 增加超时参数 --timeout，防止大文件抓取中断
-        # -vv 开启详细日志，方便出错调试
-        ebook-convert site.recipe Jidujiao_Education.epub --output-profile=tablet -vv
+        # xvfb-run 用于模拟显示环境，防止某些需要 GUI 库的报错
+        # --timeout 300 设置单个请求超时为 300秒，避免网络波动中断
+        xvfb-run ebook-convert site.recipe Jidujiao_Education.epub --output-profile=tablet --timeout 300 -vv
 
-    # 7. (可选) 上传为 Artifacts，可以直接下载，保留 90 天
+    # 8. 上传结果 (修复: 升级到 v4)
     - name: Upload Ebook Artifact
       uses: actions/upload-artifact@v4
       with:
         name: Jidujiao-Ebook
         path: Jidujiao_Education.epub
         retention-days: 5
-    
-    # 8. (高级可选) 自动发布到 Releases (如果你需要永久链接)
-    # 需要在仓库 Settings -> Secrets 设置 GITHUB_TOKEN (通常默认就有)
-    # - name: Release
-    #   uses: softprops/action-gh-release@v1
-    #   if: startsWith(github.ref, 'refs/tags/')
-    #   with:
-    #     files: Jidujiao_Education.epub
