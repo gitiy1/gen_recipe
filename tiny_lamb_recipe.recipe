@@ -21,8 +21,11 @@ class TinyLambRecipe(BasicNewsRecipe):
     MAX_TOTAL_ARTICLES = 800
     MAX_ARTICLES_PER_CATEGORY = 200
 
+    no_stylesheets = True
     remove_javascript = True
-    no_stylesheets = False
+    compress_news_images = True
+    scale_news_images = (800, 1000)
+    remove_attributes = ['style', 'width', 'height', 'align']
     auto_cleanup = False  # 我们自己精确裁剪 HTML
 
     feeds = []  # 不用内置 feeds
