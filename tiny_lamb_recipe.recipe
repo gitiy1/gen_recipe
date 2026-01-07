@@ -24,9 +24,25 @@ class TinyLambRecipe(BasicNewsRecipe):
     # 不要设置 ignore_duplicate_articles（你这版 calibre 里不是 bool）
     # ignore_duplicate_articles = True  # <-- 删掉/不要写
 
-    remove_javascript = True
-    no_stylesheets = False
+    # 1. 自动清理: 必须开启，这是提取正文的基础
     auto_cleanup = True
+    
+    # 2. 移除所有 CSS: 墨水屏不需要花哨的网页样式，这能极大提升渲染速度
+    no_stylesheets = True
+    
+    # 3. 移除 JavaScript: 电子书不需要脚本
+    remove_javascript = True
+    
+    # 4. 图片优化: 
+    # compress_news_images = True 会自动把图片转为灰度并压缩
+    compress_news_images = True
+    # 限制图片最大尺寸: 宽 800, 高 1000 (适合 Kindle Paperwhite/Oasis)
+    # 超过这个尺寸的大图会被缩小，极大减小体积
+    scale_news_images = (800, 1000)
+    
+    # 5. 清理 HTML 标签属性:
+    # 移除所有内联 style, width, height (让阅读器自己决定排版)
+    remove_attributes = ['style', 'width', 'height', 'align', 'class', 'id']
 
     feeds = []  # 用 parse_index() 直接返回 (分类, 文章列表)
 
@@ -68,7 +84,7 @@ class TinyLambRecipe(BasicNewsRecipe):
     def _canonical_post_url(self, link):
         """
         把各种形式统一为：
-        https://tiny-lamb-reformed.github.io/zh-cn/posts/<slug>/
+        https://tiny-lamb-reformed.github.io/zh-cn/posts//
         用来避免 /posts/ 与 /zh-cn/posts/ 的重复下载与标题异常。
         """
         if not link:
