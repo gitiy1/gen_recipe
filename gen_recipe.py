@@ -51,10 +51,8 @@ def generate_smart_recipe(domain, filename):
     categories = get_all_categories(domain)
     if not categories: return
 
-    # 1. 识别父节点
     parent_ids = set(c['parent'] for c in categories.values() if c['parent'] != 0)
     
-    # 2. 构建数据
     cat_data_list = []
     name_memo = {}
     
@@ -71,13 +69,11 @@ def generate_smart_recipe(domain, filename):
 
     cat_data_list.sort(key=lambda x: x['name'])
     
-    # 3. 生成 Recipe
     recipe_code = f"""import feedparser
 import math
 import time
 from calibre.web.feeds.news import BasicNewsRecipe
 
-# --- 自定义 Article 类 (v8.0 终极补全) ---
 class MyArticle:
     def __init__(self, title, url, description, author, published, content):
         self.title = title
@@ -85,27 +81,20 @@ class MyArticle:
         self.description = description
         self.summary = description 
         self.text_summary = description
-        
         self.author = author
-        self.author_sort = author  # 预防性修复：作者排序字段
-        
+        self.author_sort = author
         self.published = published
         self.formatted_date = published if published else 'Unknown Date'
-        
         self.content = content
         self.text = content
-        
         self.toc_thumbnail = None
         self.id = None
         self.date = None
         self.utctime = None
         self.downloaded = True
         self.orig_url = url
-        
-        # 关键修复：内部目录项列表
         self.internal_toc_entries = []
 
-# --- 自定义 Feed 类 ---
 class MyFeed:
     def __init__(self, title, articles):
         self.title = title
@@ -114,35 +103,44 @@ class MyFeed:
         self.description = None
         self.id = None
 
-    def __len__(self):
-        return len(self.articles)
+    def __len__(self): return len(self.articles)
+    def __iter__(self): return iter(self.articles)
+    def __getitem__(self, index): return self.articles[index]
+    def has_embedded_content(self): return False
+    def is_empty(self): return len(self.articles) == 0
 
-    def __iter__(self):
-        return iter(self.articles)
-
-    def __getitem__(self, index):
-        return self.articles[index]
-
-    def has_embedded_content(self):
-        return False
-        
-    def is_empty(self):
-        return len(self.articles) == 0
-
-class JidujiaoChronological(BasicNewsRecipe):
-    title          = '基督教教育网 (全站编年史版)'
-    description    = '已合并分页目录，并按时间【从旧到新】排序。'
+class JidujiaoLite(BasicNewsRecipe):
+    title          = '基督教教育网 (墨水屏精简版)'
+    description    = '全站内容 - 极致优化：去样式、灰度图片、纯净排版'
     language       = 'zh'
     encoding       = 'utf-8'
     oldest_article = 36500
     max_articles_per_feed = 1000
-
-    remove_javascript = True
-    no_stylesheets = False
-    auto_cleanup   = True
     
-    # 增加超时时间
-    timeout        = 120
+    # --- 核心优化配置 (瘦身关键) ---
+    
+    # 1. 自动清理: 必须开启，这是提取正文的基础
+    auto_cleanup = True
+    
+    # 2. 移除所有 CSS: 墨水屏不需要花哨的网页样式，这能极大提升渲染速度
+    no_stylesheets = True
+    
+    # 3. 移除 JavaScript: 电子书不需要脚本
+    remove_javascript = True
+    
+    # 4. 图片优化: 
+    # compress_news_images = True 会自动把图片转为灰度并压缩
+    compress_news_images = True
+    # 限制图片最大尺寸: 宽 800, 高 1000 (适合 Kindle Paperwhite/Oasis)
+    # 超过这个尺寸的大图会被缩小，极大减小体积
+    scale_news_images = (800, 1000)
+    
+    # 5. 清理 HTML 标签属性:
+    # 移除所有内联 style, width, height (让阅读器自己决定排版)
+    remove_attributes = ['style', 'width', 'height', 'align', 'class', 'id']
+    
+    # 6. 抓取稳定性配置
+    timeout = 120
     simultaneous_downloads = 5
 
     MY_CATEGORIES = {cat_data_list}
@@ -151,7 +149,6 @@ class JidujiaoChronological(BasicNewsRecipe):
 
     def parse_feeds(self):
         master_feeds_list = []
-        
         for cat in self.MY_CATEGORIES:
             category_name = cat['name']
             base_url = cat['url']
@@ -164,61 +161,41 @@ class JidujiaoChronological(BasicNewsRecipe):
             print(f"正在处理分类: {{category_name}} (共 {{total_count}} 篇, 需抓取 {{pages_to_fetch}} 页)")
             
             all_articles = []
-            
             for p in range(1, pages_to_fetch + 1):
                 feed_url = base_url if p == 1 else f"{{base_url}}?paged={{p}}"
                 try:
                     f = feedparser.parse(feed_url)
                     if not f.entries: break
-                        
                     for entry in f.entries:
                         title = entry.get('title', 'Untitled')
                         url   = entry.get('link', '')
                         desc  = entry.get('description', '')
-                        
                         date  = entry.get('published_parsed', None)
                         date_str = entry.get('published', '')
-                        
                         if not url: continue
-                        
                         all_articles.append({{
-                            'title': title,
-                            'url': url,
-                            'description': desc,
-                            'author': 'Unknown',
-                            'date': date,
-                            'date_str': date_str,
-                            'content': '' 
+                            'title': title, 'url': url, 'description': desc,
+                            'author': 'Unknown', 'date': date, 'date_str': date_str, 'content': '' 
                         }})
                 except Exception as e:
                     print(f"  -> 抓取失败: {{e}}")
             
-            # 排序：从旧到新
             all_articles.sort(key=lambda x: x['date'] if x['date'] else time.localtime(0))
             
             final_articles = []
             for a in all_articles:
-                art = MyArticle(
-                    a['title'],
-                    a['url'],
-                    a['description'],
-                    a['author'],
-                    a['date_str'],
-                    a['content']
-                )
+                art = MyArticle(a['title'], a['url'], a['description'], a['author'], a['date_str'], a['content'])
                 final_articles.append(art)
             
             if final_articles:
-                feed_obj = MyFeed(category_name, final_articles)
-                master_feeds_list.append(feed_obj)
-                
-                print(f"  -> {{category_name}} 完成: 合并了 {{len(final_articles)}} 篇文章")
+                master_feeds_list.append(MyFeed(category_name, final_articles))
+                print(f"  -> {{category_name}} 完成")
         
         return master_feeds_list
 """
     with open(filename, "w", encoding="utf-8") as f:
         f.write(recipe_code)
-    print(f"成功生成 v8.0 Recipe: {filename}")
+    print(f"成功生成墨水屏专用版 Recipe: {filename}")
 
 if __name__ == "__main__":
     generate_smart_recipe(TARGET_DOMAIN, RECIPE_FILENAME)
