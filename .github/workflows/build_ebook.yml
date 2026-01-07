@@ -1,8 +1,8 @@
 name: Build Ebook with Nix
 
 on:
-  # schedule:
-  #   - cron: '0 0 * * *'
+  schedule:
+    - cron: '0 0 * * *'
   workflow_dispatch:
 
 permissions:
@@ -13,21 +13,17 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    # 1. 拉取代码
     - name: Checkout code
       uses: actions/checkout@v4
 
-    # 2. 安装 Nix (使用 Determinate Systems 的安装器，非常快且稳定)
+    # --- 修复点 1: 更新 Action 版本 ---
     - name: Install Nix
-      uses: determinate-systems/nix-installer-action@v9
-
-    # 3. 启用 Magic Nix Cache (自动缓存 Nix Store 到 GitHub Cache)
-    # 只要 flake.lock 不变，第二次运行几乎不需要下载任何包
+      uses: determinate-systems/nix-installer-action@main
+      
     - name: Setup Magic Nix Cache
-      uses: determinate-systems/magic-nix-cache-action@v2
+      uses: determinate-systems/magic-nix-cache-action@main
+    # --------------------------------
 
-    # 4. 生成 Recipe
-    # 使用 `nix develop --command` 在 Nix 环境中运行命令
     - name: Generate Recipe File
       run: |
         nix develop --command python gen_recipe.py
@@ -39,14 +35,13 @@ jobs:
           exit 1
         fi
 
-    # 5. 转换电子书
-    # 直接调用 nix 环境中的 xvfb-run 和 ebook-convert
-    # 不需要再去处理 libEGL 等依赖，Nix 包已经封装好了 RPATH
+    # --- 修复点 2 & 3: 减少日志 + 适配墨水屏 ---
     - name: Convert to EPUB
       run: |
-        nix develop --command xvfb-run ebook-convert site.recipe Jidujiao_Education.epub --output-profile=tablet -vv
+        # 移除了 -vv (详细日志)，只保留默认输出
+        # 将 --output-profile 改为 kindle_pw (适合高分屏墨水屏)
+        nix develop --command xvfb-run ebook-convert site.recipe Jidujiao_Education.epub -v --output-profile=kindle_pw
 
-    # 6. 上传结果
     - name: Upload Ebook Artifact
       uses: actions/upload-artifact@v4
       with:
