@@ -20,7 +20,7 @@ class TinyLambRecipe(BasicNewsRecipe):
     CATEGORIES_INDEX = "https://tiny-lamb-reformed.github.io/zh-cn/categories/"
 
     # 每个分类最多抓多少篇（None/0 表示不限制）
-    MAX_ARTICLES_PER_CATEGORY = 200
+    MAX_ARTICLES_PER_CATEGORY = 0
     # 每个分类最多翻多少页（防止死循环）
     MAX_PAGES_PER_CATEGORY = 50
 
@@ -32,10 +32,41 @@ class TinyLambRecipe(BasicNewsRecipe):
 
     # ========= 工具函数 =========
 
+    def _open_url(self, url):
+        """
+        mechanize 在 GitHub Pages 上对“目录型 URL”可能 404。
+        这里做容错：
+        1) 试 url
+        2) 试 url + 'index.html'
+        """
+        tried = []
+
+        def try_one(u):
+            tried.append(u)
+            return self.browser.open(u).read()
+
+        # 1) 原 URL
+        try:
+            return try_one(url)
+        except Exception as e1:
+            # 2) index.html 兜底
+            try:
+                if url.endswith("/"):
+                    return try_one(url + "index.html")
+                else:
+                    return try_one(url + "/index.html")
+            except Exception as e2:
+                # 打印更有用的日志
+                try:
+                    self.log("Failed URLs: {}".format(tried))
+                    self.log("Last error: {}".format(e2))
+                except Exception:
+                    pass
+                raise
+
     def _soup(self, url):
-        raw = self.browser.open(url).read()
+        raw = self._open_url(url)
         from bs4 import BeautifulSoup
-        # 用内置解析器，避免 runner 没装 lxml
         return BeautifulSoup(raw, "html.parser")
 
     def _clean_category_title(self, text):
@@ -49,14 +80,23 @@ class TinyLambRecipe(BasicNewsRecipe):
         t = re.sub(r"\s+\d+\s*$", "", t).strip()
         return t or None
 
-    def _category_term_url(self, cat_title):
+    def _category_term_url_candidates(self, cat_title):
         """
         Hugo taxonomy term URL：/zh-cn/categories/<term>/
-        term 可能是中文，必须 URL 编码。
+        但 GitHub Pages + mechanize 有时对编码/目录映射不一致：
+        - 试 percent-encoding
+        - 试原始中文路径
+        - 两者都再试 index.html（由 _open_url 负责）
         """
-        # 注意：Hugo/GitHub Pages 对中文路径通常是 UTF-8 percent-encoding
         encoded = quote(cat_title, safe="")
-        return urljoin(self.CATEGORIES_INDEX, encoded + "/")
+        u1 = urljoin(self.CATEGORIES_INDEX, encoded + "/")
+        u2 = urljoin(self.CATEGORIES_INDEX, cat_title + "/")
+        # 去重保持顺序
+        out = []
+        for u in (u1, u2):
+            if u not in out:
+                out.append(u)
+        return out
 
     def _find_next_page(self, soup, current_url):
         """
@@ -101,15 +141,12 @@ class TinyLambRecipe(BasicNewsRecipe):
 
     def _discover_categories(self, index_soup):
         """
-        关键：/zh-cn/categories/ 页面里的分类列表可能不是链接，而是纯文本 li。
-        我们优先从 li 文本解析（末尾带数字计数的那种），并自己拼 term URL。
-        同时也兼容万一页面里未来变成链接的情况。
+        /zh-cn/categories/ 页面分类列表是纯文本 li（不是链接）。
+        从 li 文本解析分类名，然后自己拼 term URL。
         """
         categories = []
-        seen = set()
+        seen_titles = set()
 
-        # 1) 优先：从 li 文本抓（形如 “xxx 493”）
-        # 页面中分类区通常是一个 ul/li 列表
         for li in index_soup.find_all("li"):
             txt = li.get_text(" ", strip=True) or ""
             # 典型分类行末尾是数字计数
@@ -118,30 +155,10 @@ class TinyLambRecipe(BasicNewsRecipe):
             cat_title = self._clean_category_title(txt)
             if not cat_title:
                 continue
-            cat_url = self._category_term_url(cat_title)
-            if cat_url in seen:
+            if cat_title in seen_titles:
                 continue
-            seen.add(cat_url)
-            categories.append((cat_title, cat_url))
-
-        # 2) 兼容：如果未来分类变成 <a href="/zh-cn/categories/...">
-        if not categories:
-            for a in index_soup.find_all("a", href=True):
-                href = (a.get("href") or "").strip()
-                if "/zh-cn/categories/" not in href:
-                    continue
-                cat_url = urljoin(self.CATEGORIES_INDEX, href).split("#", 1)[0]
-                if cat_url.rstrip("/") == self.CATEGORIES_INDEX.rstrip("/"):
-                    continue
-                if not cat_url.startswith(self.CATEGORIES_INDEX):
-                    continue
-                cat_title = self._clean_category_title(a.get_text(" ", strip=True))
-                if not cat_title:
-                    continue
-                if cat_url in seen:
-                    continue
-                seen.add(cat_url)
-                categories.append((cat_title, cat_url))
+            seen_titles.add(cat_title)
+            categories.append(cat_title)
 
         return categories
 
@@ -156,13 +173,33 @@ class TinyLambRecipe(BasicNewsRecipe):
         ]
         —— 每个分类就是 EPUB 的一级目录
         """
+        # 先抓分类索引（带 index.html 容错）
         index_soup = self._soup(self.CATEGORIES_INDEX)
-        categories = self._discover_categories(index_soup)
+        cat_titles = self._discover_categories(index_soup)
 
         feeds = []
         post_href_re = re.compile(r"/posts/")
 
-        for cat_title, cat_url in categories:
+        for cat_title in cat_titles:
+            # 找到一个能打开的分类 URL（编码/不编码 两种都试）
+            cat_url = None
+            for cand in self._category_term_url_candidates(cat_title):
+                try:
+                    # 试探性打开，能打开就用
+                    self._open_url(cand)
+                    cat_url = cand
+                    break
+                except Exception:
+                    continue
+
+            if not cat_url:
+                # 这个分类打不开就跳过
+                try:
+                    self.log("Skip category (cannot open): {}".format(cat_title))
+                except Exception:
+                    pass
+                continue
+
             articles = []
             seen_posts = set()
 
@@ -211,5 +248,10 @@ class TinyLambRecipe(BasicNewsRecipe):
 
             if articles:
                 feeds.append((cat_title, articles))
+            else:
+                try:
+                    self.log("Category has no articles (parsed): {}".format(cat_title))
+                except Exception:
+                    pass
 
         return feeds
