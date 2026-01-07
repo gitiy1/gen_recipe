@@ -90,7 +90,7 @@ class MyArticle:
         self.id = None
         self.date = None
 
-# --- 自定义 Feed 类 (关键修复: 增加列表行为) ---
+# --- 自定义 Feed 类 (已补全所有接口) ---
 class MyFeed:
     def __init__(self, title, articles):
         self.title = title
@@ -99,17 +99,22 @@ class MyFeed:
         self.description = None
         self.id = None
 
-    # 让对象支持 len(feed)
     def __len__(self):
         return len(self.articles)
 
-    # 让对象支持 for article in feed
     def __iter__(self):
         return iter(self.articles)
 
-    # 让对象支持 feed[0]
     def __getitem__(self, index):
         return self.articles[index]
+
+    # 关键修复：告诉 Calibre 我们没有嵌入内容，请去下载网页！
+    def has_embedded_content(self):
+        return False
+        
+    # 预防性补充
+    def is_empty(self):
+        return len(self.articles) == 0
 
 class JidujiaoChronological(BasicNewsRecipe):
     title          = '基督教教育网 (全站编年史版)'
@@ -165,7 +170,7 @@ class JidujiaoChronological(BasicNewsRecipe):
                             'author': 'Unknown',
                             'date': date,
                             'date_str': date_str,
-                            'content': ''
+                            'content': '' # 留空，强制下载
                         }})
                 except Exception as e:
                     print(f"  -> 抓取失败: {{e}}")
@@ -186,7 +191,6 @@ class JidujiaoChronological(BasicNewsRecipe):
                 final_articles.append(art)
             
             if final_articles:
-                # 使用自定义的 MyFeed 类
                 feed_obj = MyFeed(category_name, final_articles)
                 master_feeds_list.append(feed_obj)
                 
@@ -196,7 +200,7 @@ class JidujiaoChronological(BasicNewsRecipe):
 """
     with open(filename, "w", encoding="utf-8") as f:
         f.write(recipe_code)
-    print(f"成功生成无敌版 Recipe: {filename}")
+    print(f"成功生成补全版 Recipe: {filename}")
 
 if __name__ == "__main__":
     generate_smart_recipe(TARGET_DOMAIN, RECIPE_FILENAME)
