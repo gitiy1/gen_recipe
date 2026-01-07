@@ -4,30 +4,28 @@
 from __future__ import unicode_literals
 
 import re
-from urllib.parse import urljoin
+from urllib.parse import urljoin, quote
 
 from calibre.web.feeds.news import BasicNewsRecipe
 
 
 class TinyLambRecipe(BasicNewsRecipe):
-
     # ========= 基本信息 =========
     title = u"基督教小小羊园地（按分类目录）"
-    description = u"从分类页面抓取文章，按分类生成 EPUB 目录"
+    description = u"从分类页面抓取分类结构，按分类生成 EPUB 目录"
     language = "zh-CN"
 
     # ========= 站点配置 =========
     SITE_ROOT = "https://tiny-lamb-reformed.github.io"
     CATEGORIES_INDEX = "https://tiny-lamb-reformed.github.io/zh-cn/categories/"
 
-    # 每个分类最多抓多少篇（None 或 0 表示不限制）
+    # 每个分类最多抓多少篇（None/0 表示不限制）
     MAX_ARTICLES_PER_CATEGORY = 200
-
     # 每个分类最多翻多少页（防止死循环）
     MAX_PAGES_PER_CATEGORY = 50
 
     # ========= Calibre 行为 =========
-    feeds = []                  # 不用 RSS feeds，改用 parse_index
+    feeds = []  # 不走 RSS feeds，走 parse_index
     remove_javascript = True
     no_stylesheets = False
     auto_cleanup = True
@@ -35,28 +33,34 @@ class TinyLambRecipe(BasicNewsRecipe):
     # ========= 工具函数 =========
 
     def _soup(self, url):
-        """
-        拉取页面并返回 BeautifulSoup
-        使用 html.parser，避免 runner 没装 lxml
-        """
         raw = self.browser.open(url).read()
         from bs4 import BeautifulSoup
+        # 用内置解析器，避免 runner 没装 lxml
         return BeautifulSoup(raw, "html.parser")
 
     def _clean_category_title(self, text):
         """
         分类名形如：'教会流行观念的偏差 493'
-        去掉末尾数字
+        去掉末尾计数，返回 '教会流行观念的偏差'
         """
         if not text:
             return None
         t = re.sub(r"\s+", " ", text).strip()
-        t = re.sub(r"\s+\d+\s*$", "", t)
-        return t.strip() or None
+        t = re.sub(r"\s+\d+\s*$", "", t).strip()
+        return t or None
+
+    def _category_term_url(self, cat_title):
+        """
+        Hugo taxonomy term URL：/zh-cn/categories/<term>/
+        term 可能是中文，必须 URL 编码。
+        """
+        # 注意：Hugo/GitHub Pages 对中文路径通常是 UTF-8 percent-encoding
+        encoded = quote(cat_title, safe="")
+        return urljoin(self.CATEGORIES_INDEX, encoded + "/")
 
     def _find_next_page(self, soup, current_url):
         """
-        查找“下一页 →”
+        在分类页底部找 “下一页 →”
         """
         for a in soup.find_all("a", href=True):
             txt = a.get_text(" ", strip=True) or ""
@@ -82,7 +86,7 @@ class TinyLambRecipe(BasicNewsRecipe):
 
     def _extract_description_near_link(self, a):
         """
-        尝试拿分类页中的摘要
+        尝试拿分类页中的摘要（抓不到也没关系）
         """
         try:
             parent = a.parent
@@ -95,51 +99,66 @@ class TinyLambRecipe(BasicNewsRecipe):
         except Exception:
             return ""
 
+    def _discover_categories(self, index_soup):
+        """
+        关键：/zh-cn/categories/ 页面里的分类列表可能不是链接，而是纯文本 li。
+        我们优先从 li 文本解析（末尾带数字计数的那种），并自己拼 term URL。
+        同时也兼容万一页面里未来变成链接的情况。
+        """
+        categories = []
+        seen = set()
+
+        # 1) 优先：从 li 文本抓（形如 “xxx 493”）
+        # 页面中分类区通常是一个 ul/li 列表
+        for li in index_soup.find_all("li"):
+            txt = li.get_text(" ", strip=True) or ""
+            # 典型分类行末尾是数字计数
+            if not re.search(r"\s\d+\s*$", txt):
+                continue
+            cat_title = self._clean_category_title(txt)
+            if not cat_title:
+                continue
+            cat_url = self._category_term_url(cat_title)
+            if cat_url in seen:
+                continue
+            seen.add(cat_url)
+            categories.append((cat_title, cat_url))
+
+        # 2) 兼容：如果未来分类变成 <a href="/zh-cn/categories/...">
+        if not categories:
+            for a in index_soup.find_all("a", href=True):
+                href = (a.get("href") or "").strip()
+                if "/zh-cn/categories/" not in href:
+                    continue
+                cat_url = urljoin(self.CATEGORIES_INDEX, href).split("#", 1)[0]
+                if cat_url.rstrip("/") == self.CATEGORIES_INDEX.rstrip("/"):
+                    continue
+                if not cat_url.startswith(self.CATEGORIES_INDEX):
+                    continue
+                cat_title = self._clean_category_title(a.get_text(" ", strip=True))
+                if not cat_title:
+                    continue
+                if cat_url in seen:
+                    continue
+                seen.add(cat_url)
+                categories.append((cat_title, cat_url))
+
+        return categories
+
     # ========= 核心逻辑 =========
 
     def parse_index(self):
         """
         返回：
         [
-          (分类名, [
-              {title, url, date, description},
-              ...
-          ]),
+          (分类名, [ {title,url,date,description}, ... ]),
           ...
         ]
         —— 每个分类就是 EPUB 的一级目录
         """
-
         index_soup = self._soup(self.CATEGORIES_INDEX)
+        categories = self._discover_categories(index_soup)
 
-        # ---- 1. 抓分类列表 ----
-        categories = []
-        seen_cat_urls = set()
-
-        for a in index_soup.find_all("a", href=True):
-            href = (a.get("href") or "").strip()
-            if "/zh-cn/categories/" not in href:
-                continue
-
-            cat_url = urljoin(self.CATEGORIES_INDEX, href).split("#", 1)[0]
-            if cat_url.rstrip("/") == self.CATEGORIES_INDEX.rstrip("/"):
-                continue
-            if not cat_url.startswith(self.CATEGORIES_INDEX):
-                continue
-
-            cat_title = self._clean_category_title(
-                a.get_text(" ", strip=True)
-            )
-            if not cat_title:
-                continue
-
-            if cat_url in seen_cat_urls:
-                continue
-
-            seen_cat_urls.add(cat_url)
-            categories.append((cat_title, cat_url))
-
-        # ---- 2. 逐分类抓文章 ----
         feeds = []
         post_href_re = re.compile(r"/posts/")
 
@@ -156,6 +175,7 @@ class TinyLambRecipe(BasicNewsRecipe):
 
                 for a in soup.find_all("a", href=True):
                     href = (a.get("href") or "").strip()
+                    # 文章链接：匹配 /posts/（可覆盖 ../../posts/...）
                     if not post_href_re.search(href):
                         continue
 
@@ -165,11 +185,7 @@ class TinyLambRecipe(BasicNewsRecipe):
                     if post_url in seen_posts:
                         continue
 
-                    title = re.sub(
-                        r"\s+",
-                        " ",
-                        a.get_text(" ", strip=True)
-                    ).strip()
+                    title = re.sub(r"\s+", " ", a.get_text(" ", strip=True)).strip()
                     if not title:
                         continue
 
@@ -181,16 +197,10 @@ class TinyLambRecipe(BasicNewsRecipe):
                         "description": self._extract_description_near_link(a),
                     })
 
-                    if (
-                        self.MAX_ARTICLES_PER_CATEGORY
-                        and len(articles) >= self.MAX_ARTICLES_PER_CATEGORY
-                    ):
+                    if self.MAX_ARTICLES_PER_CATEGORY and len(articles) >= self.MAX_ARTICLES_PER_CATEGORY:
                         break
 
-                if (
-                    self.MAX_ARTICLES_PER_CATEGORY
-                    and len(articles) >= self.MAX_ARTICLES_PER_CATEGORY
-                ):
+                if self.MAX_ARTICLES_PER_CATEGORY and len(articles) >= self.MAX_ARTICLES_PER_CATEGORY:
                     break
 
                 next_url = self._find_next_page(soup, page_url)
