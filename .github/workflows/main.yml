@@ -50,7 +50,7 @@ jobs:
 
     # 7. (可选) 上传为 Artifacts，可以直接下载，保留 90 天
     - name: Upload Ebook Artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: Jidujiao-Ebook
         path: Jidujiao_Education.epub
