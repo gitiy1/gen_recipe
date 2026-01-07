@@ -1,7 +1,7 @@
 import requests
 import math
 import sys
-import datetime # 引入 datetime 以防万一
+import datetime
 
 # --- 配置区 ---
 TARGET_DOMAIN = "https://jidujiaojiaoyu.org/"
@@ -77,7 +77,7 @@ import math
 import time
 from calibre.web.feeds.news import BasicNewsRecipe
 
-# --- 自定义 Article 类 (全属性补完计划) ---
+# --- 自定义 Article 类 (v8.0 终极补全) ---
 class MyArticle:
     def __init__(self, title, url, description, author, published, content):
         self.title = title
@@ -87,20 +87,24 @@ class MyArticle:
         self.text_summary = description
         
         self.author = author
+        self.author_sort = author  # 预防性修复：作者排序字段
+        
         self.published = published
         self.formatted_date = published if published else 'Unknown Date'
         
         self.content = content
         self.text = content
         
-        # 补全缺失属性
-        self.toc_thumbnail = None  # <--- 关键修复：目录缩略图
+        self.toc_thumbnail = None
         self.id = None
         self.date = None
-        self.utctime = None        # <--- 预防性修复：UTC 时间对象
+        self.utctime = None
         self.downloaded = True
         self.orig_url = url
         
+        # 关键修复：内部目录项列表
+        self.internal_toc_entries = []
+
 # --- 自定义 Feed 类 ---
 class MyFeed:
     def __init__(self, title, articles):
@@ -135,7 +139,8 @@ class JidujiaoChronological(BasicNewsRecipe):
     
     auto_cleanup   = True
     
-    timeout        = 60
+    # 增加超时时间
+    timeout        = 120
     simultaneous_downloads = 5
 
     MY_CATEGORIES = {cat_data_list}
@@ -211,7 +216,7 @@ class JidujiaoChronological(BasicNewsRecipe):
 """
     with open(filename, "w", encoding="utf-8") as f:
         f.write(recipe_code)
-    print(f"成功生成 v7.0 Recipe: {filename}")
+    print(f"成功生成 v8.0 Recipe: {filename}")
 
 if __name__ == "__main__":
     generate_smart_recipe(TARGET_DOMAIN, RECIPE_FILENAME)
