@@ -111,7 +111,7 @@ class MyFeed:
     def is_empty(self): return len(self.articles) == 0
 
 class JidujiaoPro(BasicNewsRecipe):
-    title          = '基督教教育网 (DOM 定制版)'
+    title          = '基督教教育网'
     description    = '仅保留标题、描述、分类、标签和正文。'
     language       = 'zh'
     encoding       = 'utf-8'
