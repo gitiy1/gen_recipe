@@ -71,12 +71,12 @@ def generate_smart_recipe(domain, filename):
     cat_data_list.sort(key=lambda x: x['name'])
     
     # 3. 生成 Recipe
-    # 关键修复：导入 Feed 类，并实例化对象
+    # 关键修复：同时引入 Feed 和 Article 类
     recipe_code = f"""import feedparser
 import math
 import time
 from calibre.web.feeds.news import BasicNewsRecipe
-from calibre.web.feeds import Feed  # <--- 关键修复：引入 Feed 类
+from calibre.web.feeds import Feed, Article  # <--- 关键修复：导入 Article
 
 class JidujiaoChronological(BasicNewsRecipe):
     title          = '基督教教育网 (全站编年史版)'
@@ -138,24 +138,25 @@ class JidujiaoChronological(BasicNewsRecipe):
             # 排序：从旧到新
             all_articles.sort(key=lambda x: x['date'] if x['date'] else time.localtime(0))
             
-            # 格式化为 Calibre 列表
+            # --- 关键修复区 ---
             final_articles = []
             for a in all_articles:
-                final_articles.append({{
-                    'title': a['title'],
-                    'url':   a['url'],
-                    'description': a['description'],
-                    'date':  a['date_str']
-                }})
+                # 必须实例化 Article 对象，不能使用字典
+                # Article(title, url, description, date, content)
+                art = Article(
+                    a['title'],
+                    a['url'],
+                    a['description'],
+                    a['date_str'],
+                    None  # content 留空，让 Calibre 自动去抓
+                )
+                final_articles.append(art)
             
             if final_articles:
-                # --- 关键修复开始 ---
-                # 必须创建一个 Feed 对象，而不是返回元组
                 feed_obj = Feed()
                 feed_obj.title = category_name
                 feed_obj.articles = final_articles
                 master_feeds_list.append(feed_obj)
-                # --- 关键修复结束 ---
                 
                 print(f"  -> {{category_name}} 完成: 合并了 {{len(final_articles)}} 篇文章")
         
