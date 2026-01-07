@@ -110,7 +110,7 @@ def generate_split_recipes(domain):
         
         # 生成安全的文件名
         safe_name = sanitize_filename(series_name)
-        recipe_filename = f"Jidujiao_{safe_name}.recipe"
+        recipe_filename = f"基督教教育网_{safe_name}.recipe"
         
         # 书名
         book_title = f"基督教教育网：{series_name}"
