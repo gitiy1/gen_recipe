@@ -24,7 +24,7 @@ jobs:
         run: |
           mkdir -p dist
           # 你 repo 根目录应当有 tiny_lamb_recipe.recipe
-          ebook-convert tiny_lamb_recipe.recipe dist/TinyLamb.epub
+          ebook-convert tiny_lamb_recipe.recipe dist/TinyLamb.epub --output-profile=kindle_pw
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
