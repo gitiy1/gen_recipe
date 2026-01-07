@@ -12,7 +12,7 @@ from calibre.web.feeds.news import BasicNewsRecipe
 
 class TinyLambRecipe(BasicNewsRecipe):
     title = u"基督教小小羊园地（按分类目录）"
-    description = u"RSS 拉文章 -> 文章页解析分类 -> 按分类生成 EPUB 目录（统一 zh-cn 链接并去重）"
+    description = u"RSS 拉文章 -> 文章页解析分类 -> 按分类生成 EPUB 目录（正文仅保留 post-heading 与 blog-post）"
     language = "zh-CN"
 
     SITE_ROOT = "https://tiny-lamb-reformed.github.io"
@@ -21,35 +21,18 @@ class TinyLambRecipe(BasicNewsRecipe):
     MAX_TOTAL_ARTICLES = 800
     MAX_ARTICLES_PER_CATEGORY = 200
 
-    # 不要设置 ignore_duplicate_articles（你这版 calibre 里不是 bool）
-    # ignore_duplicate_articles = True  # <-- 删掉/不要写
+    # 注意：这里必须是集合/可迭代，不要写 True
+    ignore_duplicate_articles = {'url'}  # 文档示例就是这样写的 :contentReference[oaicite:2]{index=2}
 
-    # 1. 自动清理: 必须开启，这是提取正文的基础
-    auto_cleanup = True
-    
-    # 2. 移除所有 CSS: 墨水屏不需要花哨的网页样式，这能极大提升渲染速度
-    no_stylesheets = True
-    
-    # 3. 移除 JavaScript: 电子书不需要脚本
     remove_javascript = True
-    
-    # 4. 图片优化: 
-    # compress_news_images = True 会自动把图片转为灰度并压缩
-    compress_news_images = True
-    # 限制图片最大尺寸: 宽 800, 高 1000 (适合 Kindle Paperwhite/Oasis)
-    # 超过这个尺寸的大图会被缩小，极大减小体积
-    scale_news_images = (800, 1000)
-    
-    # 5. 清理 HTML 标签属性:
-    # 移除所有内联 style, width, height (让阅读器自己决定排版)
-    remove_attributes = ['style', 'width', 'height', 'align', 'class', 'id']
+    no_stylesheets = False
+    auto_cleanup = False  # 我们要精确保留两个块，不用 readability 自动清理
 
-    feeds = []  # 用 parse_index() 直接返回 (分类, 文章列表)
+    feeds = []
 
     # ---------- 网络/解析 ----------
 
     def _open_url(self, url):
-        # mechanize 有时对目录 URL 不自动 index.html，做兜底
         tried = []
 
         def try_one(u):
@@ -79,26 +62,51 @@ class TinyLambRecipe(BasicNewsRecipe):
     def _norm_ws(self, s):
         return re.sub(r"\s+", " ", (s or "").strip())
 
-    # ---------- 关键：URL 规范化，统一到 /zh-cn/posts/ ----------
+    # ---------- 关键：正文只保留两块 ----------
+
+    def preprocess_html(self, soup):
+        """
+        只保留 class=post-heading 和 class=blog-post 的内容。
+        这是对每篇文章页生效的强制清洗。:contentReference[oaicite:3]{index=3}
+        """
+        try:
+            body = soup.body
+            if body is None:
+                return soup
+
+            keep = []
+
+            # 先标题块，再正文块（保持阅读顺序）
+            for cls in ("post-heading", “post-meta", "blog-post"):
+                for tag in soup.find_all(class_=cls):
+                    keep.append(tag)
+
+            # 如果完全没找到（比如页面结构变了），就别清空，避免输出空白文章
+            if not keep:
+                return soup
+
+            body.clear()
+            for tag in keep:
+                body.append(tag)
+
+        except Exception:
+            # 出错时宁可保留原文，避免整篇文章空掉
+            return soup
+
+        return soup
+
+    # ---------- URL 规范化，统一到 /zh-cn/posts/ ----------
 
     def _canonical_post_url(self, link):
-        """
-        把各种形式统一为：
-        https://tiny-lamb-reformed.github.io/zh-cn/posts//
-        用来避免 /posts/ 与 /zh-cn/posts/ 的重复下载与标题异常。
-        """
         if not link:
             return None
-
-        # 先变成绝对 URL
         url = urljoin(self.SITE_ROOT, link)
         p = urlparse(url)
         path = p.path or ""
 
-        # 识别 posts slug（支持 /posts/x/ 和 /zh-cn/posts/x/）
         m = re.search(r"/(?:zh-cn/)?posts/([^/]+)/?", path)
         if not m:
-            return url  # 非 posts 链接就原样返回
+            return url
 
         slug = m.group(1)
         return "{}/zh-cn/posts/{}/".format(self.SITE_ROOT, slug)
@@ -106,10 +114,6 @@ class TinyLambRecipe(BasicNewsRecipe):
     # ---------- RSS 解析 ----------
 
     def _parse_rss_entries(self, rss_bytes):
-        """
-        返回 [(title, link, date_str), ...]
-        优先 feedparser，fallback 简单正则。
-        """
         try:
             import feedparser
             f = feedparser.parse(rss_bytes)
@@ -137,84 +141,3 @@ class TinyLambRecipe(BasicNewsRecipe):
             date = self._norm_ws(d.group(1)) if d else ""
             if title and link:
                 out.append((title, link, date))
-        return out
-
-    # ---------- 文章页分类解析 ----------
-
-    def _pick_categories_from_article(self, article_url):
-        """
-        从文章页解析分类：抓所有 href 含 /zh-cn/categories/ 的 a 标签文本
-        """
-        soup = self._soup(article_url)
-        cats = []
-
-        for a in soup.find_all("a", href=True):
-            href = (a.get("href") or "").strip()
-            if "/zh-cn/categories/" not in href:
-                continue
-            # 排除 categories 首页
-            if href.rstrip("/").endswith("/zh-cn/categories"):
-                continue
-            txt = self._norm_ws(a.get_text())
-            if txt:
-                cats.append(txt)
-
-        # 去重保持顺序
-        out = []
-        seen = set()
-        for c in cats:
-            if c not in seen:
-                seen.add(c)
-                out.append(c)
-
-        return out
-
-    # ---------- 核心：构建分类目录 ----------
-
-    def parse_index(self):
-        rss_bytes = self._open_url(self.RSS_URL)
-        entries = self._parse_rss_entries(rss_bytes)
-
-        if self.MAX_TOTAL_ARTICLES and len(entries) > self.MAX_TOTAL_ARTICLES:
-            entries = entries[: self.MAX_TOTAL_ARTICLES]
-
-        grouped = OrderedDict()
-        global_seen = set()  # 用规范化 URL 做全局去重（避免同文两次）
-
-        for (title, link, date) in entries:
-            canon_url = self._canonical_post_url(link)
-            if not canon_url:
-                continue
-
-            # 全局去重
-            if canon_url in global_seen:
-                continue
-            global_seen.add(canon_url)
-
-            # 解析分类
-            try:
-                cats = self._pick_categories_from_article(canon_url)
-            except Exception:
-                cats = []
-
-            if not cats:
-                cats = [u"未分类"]
-
-            # 多分类文章：默认放到所有分类目录（可改成只取第一个）
-            for cat in cats:
-                grouped.setdefault(cat, [])
-                grouped[cat].append({
-                    "title": title,          # 用 RSS 标题（你说这一套是正常的）
-                    "url": canon_url,        # 关键：统一 zh-cn
-                    "date": date,
-                    "description": "",
-                })
-
-        feeds = []
-        for cat, arts in grouped.items():
-            if self.MAX_ARTICLES_PER_CATEGORY:
-                arts = arts[: self.MAX_ARTICLES_PER_CATEGORY]
-            if arts:
-                feeds.append((cat, arts))
-
-        return feeds
