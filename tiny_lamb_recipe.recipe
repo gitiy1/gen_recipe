@@ -77,7 +77,7 @@ class TinyLambRecipe(BasicNewsRecipe):
             keep = []
 
             # 先标题块，再正文块（保持阅读顺序）
-            for cls in ("post-heading", “post-meta", "blog-post"):
+            for cls in ("post-heading", "post-meta", "blog-post"):
                 for tag in soup.find_all(class_=cls):
                     keep.append(tag)
 
