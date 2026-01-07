@@ -55,6 +55,6 @@ jobs:
     - name: Upload Ebook Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: Jidujiao-Series-Ebooks
+        name: Jidujiao-Edu-Series-Ebooks
         path: output_epubs/*.epub
         retention-days: 5
