@@ -90,15 +90,26 @@ class MyArticle:
         self.id = None
         self.date = None
 
-# --- 自定义 Feed 类 (关键修复) ---
-# 补全 image_url 等属性，防止 AttributeError
+# --- 自定义 Feed 类 (关键修复: 增加列表行为) ---
 class MyFeed:
     def __init__(self, title, articles):
         self.title = title
         self.articles = articles
-        self.image_url = None  # <--- 修复报错的核心
+        self.image_url = None 
         self.description = None
         self.id = None
+
+    # 让对象支持 len(feed)
+    def __len__(self):
+        return len(self.articles)
+
+    # 让对象支持 for article in feed
+    def __iter__(self):
+        return iter(self.articles)
+
+    # 让对象支持 feed[0]
+    def __getitem__(self, index):
+        return self.articles[index]
 
 class JidujiaoChronological(BasicNewsRecipe):
     title          = '基督教教育网 (全站编年史版)'
@@ -108,7 +119,7 @@ class JidujiaoChronological(BasicNewsRecipe):
     oldest_article = 36500
     max_articles_per_feed = 1000
     auto_cleanup   = True
-    timeout        = 60  # 稍微增加一点超时
+    timeout        = 60
     simultaneous_downloads = 5
 
     MY_CATEGORIES = {cat_data_list}
@@ -185,7 +196,7 @@ class JidujiaoChronological(BasicNewsRecipe):
 """
     with open(filename, "w", encoding="utf-8") as f:
         f.write(recipe_code)
-    print(f"成功生成完结版 Recipe: {filename}")
+    print(f"成功生成无敌版 Recipe: {filename}")
 
 if __name__ == "__main__":
     generate_smart_recipe(TARGET_DOMAIN, RECIPE_FILENAME)
