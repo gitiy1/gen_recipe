@@ -1,0 +1,60 @@
+name: Build Split Ebooks With Nix
+
+on:
+  # schedule:
+  #   - cron: '0 0 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install Nix
+      uses: determinate-systems/nix-installer-action@v16
+      
+    - name: Setup Magic Nix Cache
+      uses: determinate-systems/magic-nix-cache-action@v8
+
+    # 1. 运行 Python 脚本
+    # 这一步现在会生成多个 .recipe 文件 (例如 Jidujiao_Worldview.recipe)
+    - name: Generate Recipe Files
+      run: |
+        nix develop --command python gen_edu_recipe_split.py
+        echo "Recipe generation complete."
+        ls -l *.recipe
+
+    # 2. 批量转换 (Loop)
+    # 我们使用 shell 循环来处理每一个 recipe 文件
+    - name: Convert All Recipes to EPUB
+      run: |
+        # 创建一个输出目录
+        mkdir -p output_epubs
+        
+        # 遍历所有 recipe 文件
+        for recipe in *.recipe; do
+          # 获取文件名部分 (去除 .recipe 后缀)
+          filename=$(basename "$recipe" .recipe)
+          echo "=========================================="
+          echo "Converting: $recipe -> $filename.epub"
+          echo "=========================================="
+          
+          # 执行转换
+          # --output-profile=kindle_pw: 针对墨水屏优化
+          nix develop --command xvfb-run ebook-convert "$recipe" "output_epubs/$filename.epub" --output-profile=kindle_pw
+        done
+
+    # 3. 上传所有 EPUB
+    # 使用 path 通配符上传 output_epubs 目录下的所有文件
+    - name: Upload Ebook Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: Jidujiao-Series-Ebooks
+        path: output_epubs/*.epub
+        retention-days: 5
