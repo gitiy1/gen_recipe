@@ -53,13 +53,13 @@ jobs:
       run: |
         sudo -v && wget -nv -O- https://download.calibre-ebook.com/linux-installer.sh | sudo sh /dev/stdin
 
-    # 7. 转换电子书
+# 7. 转换电子书
     - name: Convert Recipe to EPUB
       run: |
-        # xvfb-run 用于模拟显示环境，防止某些需要 GUI 库的报错
-        # --timeout 300 设置单个请求超时为 300秒，避免网络波动中断
-        xvfb-run ebook-convert site.recipe Jidujiao_Education.epub --output-profile=tablet --timeout 300 -vv
-
+        # 移除了不支持的 --timeout 参数
+        # 保留 -vv (详细日志) 和 --output-profile
+        xvfb-run ebook-convert site.recipe Jidujiao_Education.epub --output-profile=tablet -vv
+        
     # 8. 上传结果 (修复: 升级到 v4)
     - name: Upload Ebook Artifact
       uses: actions/upload-artifact@v4
