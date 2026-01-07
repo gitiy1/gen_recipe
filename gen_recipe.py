@@ -1,6 +1,7 @@
 import requests
 import math
 import sys
+import datetime # 引入 datetime 以防万一
 
 # --- 配置区 ---
 TARGET_DOMAIN = "https://jidujiaojiaoyu.org/"
@@ -76,32 +77,30 @@ import math
 import time
 from calibre.web.feeds.news import BasicNewsRecipe
 
-# --- 自定义 Article 类 (全属性补全版) ---
+# --- 自定义 Article 类 (全属性补完计划) ---
 class MyArticle:
     def __init__(self, title, url, description, author, published, content):
         self.title = title
         self.url = url
         self.description = description
         self.summary = description 
-        
-        # 关键修复：添加 text_summary
         self.text_summary = description
         
         self.author = author
         self.published = published
-        
-        # 之前修复的日期
         self.formatted_date = published if published else 'Unknown Date'
         
         self.content = content
         self.text = content
         
-        # 预防性补全其他属性
+        # 补全缺失属性
+        self.toc_thumbnail = None  # <--- 关键修复：目录缩略图
         self.id = None
         self.date = None
+        self.utctime = None        # <--- 预防性修复：UTC 时间对象
         self.downloaded = True
-        self.orig_url = url  # 有时候 Calibre 需要原始链接
-
+        self.orig_url = url
+        
 # --- 自定义 Feed 类 ---
 class MyFeed:
     def __init__(self, title, articles):
@@ -212,7 +211,7 @@ class JidujiaoChronological(BasicNewsRecipe):
 """
     with open(filename, "w", encoding="utf-8") as f:
         f.write(recipe_code)
-    print(f"成功生成 v6.0 Recipe: {filename}")
+    print(f"成功生成 v7.0 Recipe: {filename}")
 
 if __name__ == "__main__":
     generate_smart_recipe(TARGET_DOMAIN, RECIPE_FILENAME)
