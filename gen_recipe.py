@@ -136,7 +136,9 @@ class JidujiaoChronological(BasicNewsRecipe):
     encoding       = 'utf-8'
     oldest_article = 36500
     max_articles_per_feed = 1000
-    
+
+    remove_javascript = True
+    no_stylesheets = False
     auto_cleanup   = True
     
     # 增加超时时间
