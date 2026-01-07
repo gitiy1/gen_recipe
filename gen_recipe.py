@@ -75,20 +75,22 @@ def generate_smart_recipe(domain, filename):
 import math
 import time
 from calibre.web.feeds.news import BasicNewsRecipe
-# 仅导入 Feed，不再导入 Article，避免版本差异导致的参数报错
 from calibre.web.feeds import Feed
 
 # --- 自定义 Article 类 (Duck Typing) ---
-# Calibre 只要对象有这些属性就能工作，不需要非得是官方 Article 实例
+# 补全了 summary, text 等常用属性，防止 AttributeError
 class MyArticle:
     def __init__(self, title, url, description, author, published, content):
         self.title = title
         self.url = url
         self.description = description
+        self.summary = description  # <--- 关键修复：Calibre 需要这个属性
         self.author = author
         self.published = published
         self.content = content
-        self.id = None # 部分插件可能需要
+        self.text = content         # <--- 预防性修复：部分插件可能访问 .text
+        self.id = None
+        self.date = None            # <--- 预防性修复
 
 class JidujiaoChronological(BasicNewsRecipe):
     title          = '基督教教育网 (全站编年史版)'
@@ -131,6 +133,8 @@ class JidujiaoChronological(BasicNewsRecipe):
                         title = entry.get('title', 'Untitled')
                         url   = entry.get('link', '')
                         desc  = entry.get('description', '')
+                        # description 往往含有 HTML，作为 summary 也没问题
+                        
                         date  = entry.get('published_parsed', None)
                         date_str = entry.get('published', '')
                         
@@ -143,17 +147,16 @@ class JidujiaoChronological(BasicNewsRecipe):
                             'author': 'Unknown',
                             'date': date,
                             'date_str': date_str,
-                            'content': ''
+                            'content': '' # 留空，让 Calibre 下载网页
                         }})
                 except Exception as e:
                     print(f"  -> 抓取失败: {{e}}")
             
-            # 排序
+            # 排序：从旧到新
             all_articles.sort(key=lambda x: x['date'] if x['date'] else time.localtime(0))
             
             final_articles = []
             for a in all_articles:
-                # 使用我们自定义的 MyArticle 类
                 art = MyArticle(
                     a['title'],
                     a['url'],
