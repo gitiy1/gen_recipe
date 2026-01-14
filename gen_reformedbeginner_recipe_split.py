@@ -14,8 +14,7 @@ RSS_PAGE_SIZE = 10
 # 比如填写 "类别检索 > 多媒体"，脚本遇到这个分类就会跳过
 EXCLUDED_CATEGORIES = [
     "类别检索 > 多媒体",
-    "类别检索 > 合集系列",
-    ""
+    "类别检索 > 合集系列"
 ]
 
 def sanitize_filename(name):
@@ -102,7 +101,7 @@ def generate_split_recipes(domain):
         should_skip = False
         for excluded in EXCLUDED_CATEGORIES:
             # 如果全名中包含排除列表里的词，则跳过
-            if excluded in full_name:
+            if excluded and excluded in full_name:
                 print(f"  [排除] 跳过分类: {full_name} (匹配规则: {excluded})", file=sys.stderr)
                 should_skip = True
                 break
@@ -233,7 +232,7 @@ class JidujiaoSplit(BasicNewsRecipe):
     fetch_retries = 10  # 重试10次  
 
     def get_obfuscated_article(self, url):  
-        """带重试机制的文章下载"""  
+        '''带重试机制的文章下载'''  
         from calibre.ptempfile import PersistentTemporaryFile  
         import time  
           
@@ -258,10 +257,10 @@ class JidujiaoSplit(BasicNewsRecipe):
             except Exception as e:  
                 count += 1  
                 if count < self.fetch_retries:  
-                    self.log.warn(f'下载失败，正在重试 ({count}/{self.fetch_retries}): {url}')  
+                    self.log.warn(f'下载失败，正在重试 ({{count}}/{{self.fetch_retries}}): {{url}}')  
                     time.sleep(2)  # 等待2秒后重试  
                 else:  
-                    self.log.error(f'重试 {self.fetch_retries} 次后仍失败: {url}')  
+                    self.log.error(f'重试 {{self.fetch_retries}} 次后仍失败: {{url}}')  
                     raise  # 抛出异常让 Calibre 记录失败  
           
         return result
