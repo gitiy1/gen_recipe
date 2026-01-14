@@ -25,7 +25,7 @@ jobs:
     - name: Generate Recipe Files
       run: |
         # nix develop --command python gen_edu_recipe_split.py
-        # rm tiny_lamb_recipe.recipe 
+        rm tiny_lamb_recipe.recipe 
         # (确保这里是你实际要运行的脚本)
         nix develop --command python gen_reformedbeginner_recipe_split.py
         echo "Recipe generation complete."
