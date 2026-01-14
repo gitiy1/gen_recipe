@@ -14,7 +14,8 @@ RSS_PAGE_SIZE = 10
 # 比如填写 "类别检索 > 多媒体"，脚本遇到这个分类就会跳过
 EXCLUDED_CATEGORIES = [
     "类别检索 > 多媒体",
-    "类别检索 > 合集系列"
+    "类别检索 > 合集系列",
+    "未分类"
 ]
 
 def sanitize_filename(name):
