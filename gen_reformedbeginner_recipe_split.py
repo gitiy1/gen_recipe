@@ -205,7 +205,7 @@ class JidujiaoSplit(BasicNewsRecipe):
 
     # --- 网络稳定性优化 ---
     # 针对不稳定的服务器，降低并发是非常有效的手段
-    timeout = 300
+    timeout = 3000
     simultaneous_downloads = 1  # 建议改为 1 以获得最高稳定性
     delay = 1 # 每次下载间隔 1 秒
 
