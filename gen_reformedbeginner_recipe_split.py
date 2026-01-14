@@ -10,11 +10,9 @@ MAX_PAGES_LIMIT = 50
 RSS_PAGE_SIZE = 10
 
 def sanitize_filename(name):
-    """清理文件名，防止非法字符"""
     return re.sub(r'[\\/*?:"<>|]', "", name).strip().replace(' ', '_')
 
 def get_all_categories(domain):
-    """API 获取分类信息"""
     categories = {} 
     base_url = domain.rstrip('/')
     api_url = f"{base_url}/wp-json/wp/v2/categories"
@@ -24,7 +22,7 @@ def get_all_categories(domain):
     while True:
         try:
             params = {'per_page': 100, 'page': page}
-            response = requests.get(api_url, params=params, timeout=10)
+            response = requests.get(api_url, params=params, timeout=20) # API 请求超时也增加
             if response.status_code != 200: break
             data = response.json()
             if not data: break
@@ -36,21 +34,20 @@ def get_all_categories(domain):
                 }
             if len(data) < 100: break
             page += 1
-        except: break
+        except Exception as e:
+            print(f"API 获取警告: {e}", file=sys.stderr)
+            break
     return categories
 
 def get_root_id(cat_id, categories):
-    """递归查找某分类的顶级父节点 ID"""
     if cat_id not in categories: return None
     parent_id = categories[cat_id]['parent']
     if parent_id == 0:
         return cat_id
-    # 防止死循环（虽然 WP 不太可能），加个深度限制或直接递归
-    if parent_id not in categories: return cat_id # 父节点不存在，自己算根
+    if parent_id not in categories: return cat_id 
     return get_root_id(parent_id, categories)
 
 def get_full_path_name(cat_id, categories, memo):
-    """构建面包屑名称"""
     if cat_id not in categories: return ""
     if cat_id in memo: return memo[cat_id]
     cat = categories[cat_id]
@@ -67,26 +64,18 @@ def generate_split_recipes(domain):
     categories = get_all_categories(domain)
     if not categories: return
 
-    # 1. 将所有子分类归类到 Root ID
-    # 结构: { root_id: [cat_info_1, cat_info_2...] }
     groups = {}
-    
-    # 先找出所有 Root 节点的名字，用于生成书名
     root_names = {cid: c['name'] for cid, c in categories.items() if c['parent'] == 0}
-    
     name_memo = {}
     
     for cat_id, cat in categories.items():
-        if cat['count'] == 0: continue # 跳过空分类
-        
-        # 找到它的根
+        if cat['count'] == 0: continue 
         root_id = get_root_id(cat_id, categories)
         if root_id is None: continue
         
         if root_id not in groups:
             groups[root_id] = []
             
-        # 构建 Feed 数据
         full_name = get_full_path_name(cat_id, categories, name_memo)
         base_feed_url = cat['link'].rstrip('/') + '/feed/'
         
@@ -96,34 +85,24 @@ def generate_split_recipes(domain):
             'count': cat['count']
         })
 
-    print(f"2. 识别到 {len(groups)} 个顶级系列，准备生成分册...", file=sys.stderr)
+    print(f"2. 识别到 {len(groups)} 个顶级系列...", file=sys.stderr)
 
-    # 2. 循环生成多个 Recipe 文件
     generated_files = []
     
     for root_id, feed_list in groups.items():
-        # 获取系列名称 (如 "世界观", "系统神学")
         series_name = root_names.get(root_id, "其他合集")
-        
-        # 按名称排序
         feed_list.sort(key=lambda x: x['name'])
-        
-        # 生成安全的文件名
         safe_name = sanitize_filename(series_name)
         recipe_filename = f"改革宗初学者_{safe_name}.recipe"
-        
-        # 书名
         book_title = f"改革宗初学者：{series_name}"
         
         print(f"  -> 生成分册: {book_title} (包含 {len(feed_list)} 个子分类)", file=sys.stderr)
 
-        # 注入代码
         recipe_code = f"""import feedparser
 import math
 import time
 from calibre.web.feeds.news import BasicNewsRecipe
 
-# --- 自定义类 ---
 class MyArticle:
     def __init__(self, title, url, description, author, published, content):
         self.title = title
@@ -144,8 +123,6 @@ class MyArticle:
         self.downloaded = True
         self.orig_url = url
         self.internal_toc_entries = []
-        
-        # 关键修复：添加 sub_pages 和 mime_type
         self.sub_pages = [] 
         self.mime_type = None
 
@@ -170,7 +147,7 @@ class JidujiaoSplit(BasicNewsRecipe):
     oldest_article = 36500
     max_articles_per_feed = 1000
     
-    # --- DOM 提取与优化配置 ---
+    # --- 墨水屏优化 ---
     auto_cleanup = False
     no_stylesheets = True
     remove_javascript = True
@@ -178,7 +155,11 @@ class JidujiaoSplit(BasicNewsRecipe):
     scale_news_images = (800, 1000)
     remove_attributes = ['style', 'width', 'height', 'align']
 
-    # 白名单：只留这 3 个部分
+    # --- 网络稳定性优化 (关键) ---
+    timeout = 300
+    simultaneous_downloads = 5
+    # delay = 1 # 每次下载间隔 1 秒
+
     keep_only_tags = [
         dict(name='h1'), 
         dict(attrs={{'class': lambda x: x and 'entry-header' in x}}),
@@ -186,19 +167,11 @@ class JidujiaoSplit(BasicNewsRecipe):
         dict(attrs={{'class': lambda x: x and 'attachment-post-thumbnail' in x}}),
     ]
 
-    # 黑名单：移除目录插件和特定图片
     remove_tags = [
-        # dict(attrs={{'class': lambda x: x and 'wp-block-uagb-table-of-contents' in x}}),
-        # dict(attrs={{'class': lambda x: x and 'wp-image-5896' in x}}),
         dict(name=['script', 'style', 'noscript', 'iframe', 'nav', 'footer']),
-        # dict(attrs={{'class': ['sharedaddy', 'related-posts', 'post-navigation']}})
-        dict(attrs={{'class': ['sd-sharing-enabled']}})
+        dict(attrs={{'class': ['sd-sharing-enabled', 'sharedaddy', 'jp-relatedposts']}})
     ]
 
-    timeout = 120
-    simultaneous_downloads = 5
-
-    # 注入当前分册的数据
     MY_CATEGORIES = {feed_list}
     RSS_PAGE_SIZE = {RSS_PAGE_SIZE}
     MAX_PAGES = {MAX_PAGES_LIMIT}
@@ -220,6 +193,7 @@ class JidujiaoSplit(BasicNewsRecipe):
             for p in range(1, pages_to_fetch + 1):
                 feed_url = base_url if p == 1 else f"{{base_url}}?paged={{p}}"
                 try:
+                    # 增加 feedparser 的超时处理
                     f = feedparser.parse(feed_url)
                     if not f.entries: break
                     for entry in f.entries:
@@ -234,7 +208,7 @@ class JidujiaoSplit(BasicNewsRecipe):
                             'author': 'Unknown', 'date': date, 'date_str': date_str, 'content': '' 
                         }})
                 except Exception as e:
-                    print(f"  -> 抓取失败: {{e}}")
+                    print(f"  -> RSS 抓取失败: {{e}}")
             
             all_articles.sort(key=lambda x: x['date'] if x['date'] else time.localtime(0))
             
