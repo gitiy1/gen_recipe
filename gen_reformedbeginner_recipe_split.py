@@ -15,7 +15,7 @@ RSS_PAGE_SIZE = 10
 EXCLUDED_CATEGORIES = [
     "类别检索 > 多媒体",
     "类别检索 > 合集系列",
-    "未分类",
+    ""
 ]
 
 def sanitize_filename(name):
@@ -205,7 +205,7 @@ class JidujiaoSplit(BasicNewsRecipe):
 
     # --- 网络稳定性优化 ---
     # 针对不稳定的服务器，降低并发是非常有效的手段
-    timeout = 3000
+    timeout = 300
     simultaneous_downloads = 1  # 建议改为 1 以获得最高稳定性
     delay = 1 # 每次下载间隔 1 秒
 
@@ -226,6 +226,45 @@ class JidujiaoSplit(BasicNewsRecipe):
     MY_CATEGORIES = {feed_list}
     RSS_PAGE_SIZE = {RSS_PAGE_SIZE}
     MAX_PAGES = {MAX_PAGES_LIMIT}
+
+    # 新增这三个属性  
+    articles_are_obfuscated = True  
+    temp_files = []  
+    fetch_retries = 10  # 重试10次  
+
+    def get_obfuscated_article(self, url):  
+        """带重试机制的文章下载"""  
+        from calibre.ptempfile import PersistentTemporaryFile  
+        import time  
+          
+        result = None  
+        count = 0  
+          
+        while count < self.fetch_retries:  
+            try:  
+                # 使用 browser 下载并设置 timeout  
+                response = self.browser.open(url, timeout=self.timeout)  
+                html = response.read()  
+                  
+                # 保存到临时文件  
+                tfile = PersistentTemporaryFile('_fa.html')  
+                tfile.write(html)  
+                tfile.close()  
+                self.temp_files.append(tfile)  
+                result = tfile.name  
+                  
+                # 成功后退出循环  
+                break  
+            except Exception as e:  
+                count += 1  
+                if count < self.fetch_retries:  
+                    self.log.warn(f'下载失败，正在重试 ({count}/{self.fetch_retries}): {url}')  
+                    time.sleep(2)  # 等待2秒后重试  
+                else:  
+                    self.log.error(f'重试 {self.fetch_retries} 次后仍失败: {url}')  
+                    raise  # 抛出异常让 Calibre 记录失败  
+          
+        return result
 
     def parse_feeds(self):
         master_feeds_list = []
