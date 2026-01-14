@@ -22,7 +22,7 @@ def get_all_categories(domain):
     while True:
         try:
             params = {'per_page': 100, 'page': page}
-            response = requests.get(api_url, params=params, timeout=20) # API 请求超时也增加
+            response = requests.get(api_url, params=params, timeout=300) # API 请求超时也增加
             if response.status_code != 200: break
             data = response.json()
             if not data: break
