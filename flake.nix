@@ -1,8 +1,7 @@
 {
-  description = "Calibre Ebook Generator Environment";
+  description = "Calibre Environment with WebP Support";
 
   inputs = {
-    # 使用 unstable 分支以获取较新的 Calibre 版本
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
   };
@@ -12,7 +11,7 @@
       let
         pkgs = import nixpkgs { inherit system; };
         
-        # 定义 Python 环境，包含我们需要的三方库
+        # 定义 Python 环境
         myPython = pkgs.python3.withPackages (ps: [
           ps.requests
           ps.feedparser
@@ -22,17 +21,21 @@
       {
         devShells.default = pkgs.mkShell {
           buildInputs = [
-            myPython           # 带依赖的 Python
-            pkgs.calibre       # Calibre 电子书工具
-            pkgs.xorg.xvfb     # 虚拟显示服务 (用于无头模式运行 Calibre)
-            pkgs.glibcLocales  # 解决潜在的编码问题
+            myPython
+            pkgs.calibre
+            pkgs.xorg.xvfb
+            pkgs.glibcLocales
+            # --- 关键修复：添加图片处理库 ---
+            pkgs.libwebp  # 解决 WebP 报错
+            pkgs.imagemagick # 辅助图片处理
+            pkgs.optipng     # 辅助图片压缩
           ];
 
-          # 设置环境变量，防止 Calibre 中文乱码或编码报错
           shellHook = ''
             export LOCALE_ARCHIVE="${pkgs.glibcLocales}/lib/locale/locale-archive"
             export LANG=C.UTF-8
-            echo "Environment ready: Python $(python --version), Calibre $(ebook-convert --version)"
+            # 尝试修复 Qt WebP 支持
+            export QT_PLUGIN_PATH="${pkgs.qt6.qtimageformats}/lib/qt-6/plugins:$QT_PLUGIN_PATH"
           '';
         };
       }
