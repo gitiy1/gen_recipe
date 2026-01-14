@@ -144,6 +144,10 @@ class MyArticle:
         self.downloaded = True
         self.orig_url = url
         self.internal_toc_entries = []
+        
+        # 关键修复：添加 sub_pages 和 mime_type
+        self.sub_pages = [] 
+        self.mime_type = None
 
 class MyFeed:
     def __init__(self, title, articles):
